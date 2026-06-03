@@ -8,7 +8,7 @@ import (
 
 func menuEntries() []menuEntry {
 	return []menuEntry{
-		{"◢◤", "Install skills", "pick a source, then jack specific skills into this folder", actInstall},
+		{"◢◤", "Install skills", "pick a source, then swoop specific skills into this folder", actInstall},
 		{"⟳", "Update folder", "pull latest from GitHub for skills in the current dir", actUpdateHere},
 		{"⟳⟳", "Update all folders", "refresh every folder you've installed into", actUpdateAll},
 		{"⌖", "Browse skills.sh", "search the directory and remember new sources", actBrowse},

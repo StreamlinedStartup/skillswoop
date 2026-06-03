@@ -112,7 +112,7 @@ func neonRule(width int) string {
 // banner: the cyberpunk wordmark used in the title bar.
 func banner(width int) string {
 	mark := gradient("▓▒░  S W O O P  ░▒▓")
-	tag := tagStyle.Render("// skillswoop · jack skills into claude + codex")
+	tag := tagStyle.Render("// skillswoop · swoop skills into claude + codex")
 	rule := neonRule(width)
 	header := lipgloss.JoinVertical(lipgloss.Left, mark+"   "+tag, rule)
 	return header

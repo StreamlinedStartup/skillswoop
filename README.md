@@ -2,7 +2,7 @@
 
 # ▓▒░ skillswoop ░▒▓
 
-**A neon TUI for managing agent skills — jack them straight into Claude Code & Codex.**
+**A neon TUI for managing agent skills — swoop them straight into Claude Code & Codex.**
 
 `swoop` is a friendly cyberpunk front-end over [`npx skills`](https://github.com/vercel-labs/skills).
 Remember your favorite skill repos, drill into individual skills, and install only the
@@ -11,7 +11,7 @@ ones you want — into the current project, for every agent you target.
 </div>
 
 ```
-▓▒░  S W O O P  ░▒▓   // skillswoop · jack skills into claude + codex
+▓▒░  S W O O P  ░▒▓   // skillswoop · swoop skills into claude + codex
 ══════════════════════════════════════════════════════════════════════
 ▸ INSTALL · mattpocock/skills   SPACE marks · ENTER installs marked
 
