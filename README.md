@@ -9,25 +9,50 @@ The command is `swoop`.
 
 ## Install
 
-Homebrew:
+### Homebrew (macOS / Linux)
 
 ```sh
 brew install StreamlinedStartup/tap/swoop
 ```
 
-go install (installs a binary named `skillswoop`):
+Or tap first, then install by short name:
+
+```sh
+brew tap StreamlinedStartup/tap
+brew install swoop
+```
+
+Then run `swoop`. Homebrew installs `node` as a dependency automatically.
+If `brew install swoop` can't find the formula, your tap clone is stale — run `brew update` and retry.
+
+### Prebuilt binary (no Homebrew, no Go)
+
+Downloads the right binary for your OS/arch and puts it on your PATH:
+
+```sh
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m); case "$ARCH" in arm64|aarch64) ARCH=arm64;; x86_64|amd64) ARCH=x86_64;; esac
+VER=$(curl -fsSL https://api.github.com/repos/StreamlinedStartup/skillswoop/releases/latest | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/StreamlinedStartup/skillswoop/releases/download/${VER}/swoop_${VER#v}_${OS}_${ARCH}.tar.gz" | tar -xz swoop
+sudo mv swoop /usr/local/bin/swoop   # or: mv swoop ~/.local/bin/
+```
+
+All builds are on the [Releases](https://github.com/StreamlinedStartup/skillswoop/releases) page.
+
+### go install
+
+Installs a binary named `skillswoop` into `$(go env GOPATH)/bin`:
 
 ```sh
 go install github.com/StreamlinedStartup/skillswoop@latest
+ln -sf "$(go env GOPATH)/bin/skillswoop" "$(go env GOPATH)/bin/swoop"   # optional: name it `swoop`
 ```
 
-Prebuilt binaries: see [Releases](https://github.com/StreamlinedStartup/skillswoop/releases).
-
-From source:
+### From source
 
 ```sh
 git clone https://github.com/StreamlinedStartup/skillswoop
-cd skillswoop && go build -o swoop .
+cd skillswoop && go build -o swoop . && sudo mv swoop /usr/local/bin/
 ```
 
 ### Requirements
