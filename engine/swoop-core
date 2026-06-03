@@ -443,31 +443,42 @@ project_dir_for() {
 # move existing GLOBAL skills out of the auto-scanned dirs and into the library
 cmd_stash() {
   mkdir -p "$LIBRARY"
-  local a dir d nm; local -a moves=()
+  local a dir e nm kind; local -a moves=()
   for a in $(load_agents); do
     dir="$(global_dir_for "$a")" || { printf '  %sskip %s (tidy not configured for it)%s\n' "$DIM" "$a" "$RST" >&2; continue; }
     [ -d "$dir" ] || continue
-    for d in "$dir"/*/; do
-      [ -d "$d" ] && [ -f "${d}SKILL.md" ] || continue
-      moves+=( "${d%/}|$(basename "$d")|$a" )
+    for e in "$dir"/*; do                              # excludes dotfiles (.DS_Store/.system)
+      [ -e "$e" ] || [ -L "$e" ] || continue           # skip the no-match literal
+      nm="$(basename "$e")"
+      if   [ -L "$e" ]; then kind=link                 # a symlink (e.g. managed by another tool)
+      elif [ -d "$e" ] && [ -f "$e/SKILL.md" ]; then kind=dir
+      else continue; fi                                # not a skill — leave it alone
+      moves+=( "$e|$nm|$a|$kind" )
     done
   done
   if [ "${#moves[@]}" -eq 0 ]; then echo "No global skills found to tidy."; return 0; fi
 
-  printf '%sThese global skills will be MOVED into your library%s\n' "$BOLD" "$RST"
-  printf '(out of the auto-scanned dirs so they stop loading everywhere; re-add per project):\n'
-  local m src; for m in "${moves[@]}"; do IFS='|' read -r src nm a <<< "$m"
-    printf '  %-26s %sfrom %s%s\n' "$nm" "$DIM" "$src" "$RST"; done
-  if [ -n "$DRYRUN" ]; then printf '%s(dry-run — nothing moved)%s\n' "$YLW" "$RST"; return 0; fi
-  ui_confirm "Move these ${#moves[@]} skill(s) into the library now?" || { echo "aborted."; return 0; }
+  printf '%sTidy will declutter your global agent skill dirs%s\n' "$BOLD" "$RST"
+  printf '(symlinks are unlinked; real skill folders move into your library):\n'
+  local m src act; for m in "${moves[@]}"; do IFS='|' read -r src nm a kind <<< "$m"
+    [ "$kind" = link ] && act="unlink" || act="move  "
+    printf '  %s%s%s %-26s %sfrom %s%s\n' "$DIM" "$act" "$RST" "$nm" "$DIM" "$src" "$RST"; done
+  if [ -n "$DRYRUN" ]; then printf '%s(dry-run — nothing changed)%s\n' "$YLW" "$RST"; return 0; fi
+  ui_confirm "Tidy these ${#moves[@]} entr(ies) now?" || { echo "aborted."; return 0; }
 
-  for m in "${moves[@]}"; do IFS='|' read -r src nm a <<< "$m"
+  local moved=0 unlinked=0 skipped=0 failed=0
+  for m in "${moves[@]}"; do IFS='|' read -r src nm a kind <<< "$m"
+    if [ "$kind" = link ]; then                        # just remove the pointer; real content lives elsewhere
+      if rm "$src" 2>/dev/null; then unlinked=$((unlinked+1)); printf '  %sunlinked%s %s %s(symlink)%s\n' "$GRN" "$RST" "$nm" "$DIM" "$RST"
+      else failed=$((failed+1)); printf '  %sfailed%s %s\n' "$RED" "$RST" "$nm"; fi
+      continue
+    fi
     local dst="$LIBRARY/$nm"
-    if [ -e "$dst" ]; then printf '  %sskip%s %s (already in library)\n' "$YLW" "$RST" "$nm"; continue; fi
-    if mv "$src" "$dst" 2>/dev/null; then save_source "$dst"; printf '  %smoved%s %s\n' "$GRN" "$RST" "$nm"
-    else printf '  %sfailed%s %s\n' "$RED" "$RST" "$nm"; fi
+    if [ -e "$dst" ]; then skipped=$((skipped+1)); printf '  %skept%s %s %s(already in library — left in place)%s\n' "$YLW" "$RST" "$nm" "$DIM" "$RST"; continue; fi
+    if mv "$src" "$dst" 2>/dev/null; then save_source "$dst"; moved=$((moved+1)); printf '  %smoved%s %s\n' "$GRN" "$RST" "$nm"
+    else failed=$((failed+1)); printf '  %sfailed%s %s\n' "$RED" "$RST" "$nm"; fi
   done
-  printf '%sDone.%s Your global dirs are lean; nothing loads everywhere unless re-added.\n' "$GRN" "$RST"
+  printf '%sDone.%s moved %s · unlinked %s · kept %s · failed %s\n' "$GRN" "$RST" "$moved" "$unlinked" "$skipped" "$failed"
 }
 
 # ---- interactive home screen --------------------------------------------
