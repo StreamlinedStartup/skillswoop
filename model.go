@@ -20,6 +20,7 @@ const (
 	scAdd           // add a source
 	scAgents        // edit default agents
 	scRemove        // remove sources (multi)
+	scRename        // give a source a friendly display name
 	scConfirm       // generic yes/no
 	scRunning       // spinner while an op runs
 	scResult        // scrollable output of an op
@@ -51,6 +52,7 @@ type model struct {
 
 	global    bool   // scope toggle (project default)
 	curSource string // source being drilled into
+	renameURL string // source whose alias is being edited (scRename)
 	busyTitle string
 	resultTitle string
 	resultErr   bool
@@ -113,14 +115,7 @@ func (m *model) Init() tea.Cmd { return m.spin.Tick }
 
 // ---- commands -----------------------------------------------------------
 func loadSourcesCmd() tea.Cmd {
-	return func() tea.Msg {
-		srcs := loadSources()
-		items := make([]item, len(srcs))
-		for i, s := range srcs {
-			items[i] = item{id: s, title: s}
-		}
-		return sourcesMsg{items}
-	}
+	return func() tea.Msg { return sourcesMsg{sourceItems()} }
 }
 
 func loadSkillsCmd(src string) tea.Cmd {

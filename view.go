@@ -54,8 +54,13 @@ func (m *model) buildBody() string {
 			m.menu.view() + "\n" + m.menu.scrollFooter()
 
 	case scSources:
-		return heading("INSTALL", "pick a source to drill into") + "\n\n" +
+		return heading("INSTALL", "pick a source · ctrl+r renames") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
+
+	case scRename:
+		return heading("RENAME source", short(m.renameURL)) + "\n\n" +
+			m.input.View() + "\n\n" +
+			rowDesc.Render("ENTER save · ESC cancel · blank = show the repo URL")
 
 	case scSkills:
 		return heading("INSTALL · "+short(m.curSource), "SPACE marks · ENTER installs marked") + "\n\n" +
@@ -120,7 +125,9 @@ func (m *model) statusBar() string {
 	case scMenu:
 		keys = key("↑↓", "move") + key("⏎", "select") + key("tab", "scope") + key("q", "quit")
 	case scSources:
-		keys = key("↑↓", "move") + key("⏎", "open") + key("tab", "scope") + key("esc", "back")
+		keys = key("↑↓", "move") + key("⏎", "open") + key("ctrl+r", "rename") + key("esc", "back")
+	case scRename:
+		keys = key("⏎", "save") + key("esc", "cancel")
 	case scSkills:
 		keys = key("↑↓", "move") + key("space", "mark") + key("a", "all") + key("⏎", "install") + key("esc", "back")
 	case scBrowseResults, scRemove:

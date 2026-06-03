@@ -136,7 +136,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// route to active text input / viewport for non-key msgs
-	if m.screen == scAdd || m.screen == scAgents || m.screen == scBrowseInput {
+	if m.screen == scAdd || m.screen == scAgents || m.screen == scBrowseInput || m.screen == scRename {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -153,6 +153,23 @@ func (m *model) activeList() *picker {
 		return m.pick
 	}
 	return nil
+}
+
+// refreshSources rebuilds the source list in place (after an alias change),
+// keeping the cursor on roughly the same row.
+func (m *model) refreshSources() {
+	cur := 0
+	if m.pick != nil {
+		cur = m.pick.cursor
+	}
+	m.enterPicker(newPicker(sourceItems(), false))
+	if cur >= m.pick.len() {
+		cur = m.pick.len() - 1
+	}
+	if cur > 0 {
+		m.pick.cursor = cur
+		m.pick.clampWindow()
+	}
 }
 
 func (m *model) setResult(body string) {
@@ -204,6 +221,16 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pick.end()
 		case "tab":
 			m.global = !m.global
+		case "ctrl+r":
+			if it, ok := m.pick.current(); ok {
+				m.renameURL = it.id
+				m.prev = scSources
+				m.screen = scRename
+				m.input.Placeholder = "friendly name (blank = show the repo URL)"
+				m.input.SetValue(loadAliases()[it.id])
+				m.input.CursorEnd()
+				m.input.Focus()
+			}
 		case "enter":
 			if it, ok := m.pick.current(); ok {
 				m.curSource = it.id
@@ -213,6 +240,21 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case scRename:
+		switch k {
+		case "esc":
+			m.screen = scSources
+			return m, nil
+		case "enter":
+			_ = saveAlias(m.renameURL, m.input.Value())
+			m.refreshSources()
+			m.screen = scSources
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
 
 	case scSkills:
 		switch k {

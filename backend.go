@@ -72,6 +72,64 @@ func readLines(path string) []string {
 func loadSources() []string  { return readLines(filepath.Join(configDir(), "sources")) }
 func loadProjects() []string { return readLines(filepath.Join(configDir(), "projects")) }
 
+// ---- friendly source aliases (TUI display only) -------------------------
+// stored as "url<TAB>alias" lines in ~/.config/swoop/aliases.
+func aliasesPath() string { return filepath.Join(configDir(), "aliases") }
+
+func loadAliases() map[string]string {
+	m := map[string]string{}
+	for _, ln := range readLines(aliasesPath()) {
+		f := strings.SplitN(ln, "\t", 2)
+		if len(f) == 2 && strings.TrimSpace(f[1]) != "" {
+			m[f[0]] = f[1]
+		}
+	}
+	return m
+}
+
+// saveAlias sets (or, with an empty name, clears) the alias for a source URL.
+func saveAlias(url, name string) error {
+	al := loadAliases()
+	name = strings.TrimSpace(name)
+	if name == "" {
+		delete(al, url)
+	} else {
+		al[url] = name
+	}
+	var b strings.Builder
+	for u, n := range al {
+		b.WriteString(u)
+		b.WriteByte('\t')
+		b.WriteString(n)
+		b.WriteByte('\n')
+	}
+	if err := os.MkdirAll(configDir(), 0o755); err != nil {
+		return err
+	}
+	tmp := aliasesPath() + ".tmp"
+	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, aliasesPath())
+}
+
+// sourceItems builds the install/source list, showing an alias when one is set
+// (with the real repo URL as the dim subtitle). item.id is always the real URL.
+func sourceItems() []item {
+	al := loadAliases()
+	srcs := loadSources()
+	items := make([]item, len(srcs))
+	for i, s := range srcs {
+		it := item{id: s, title: s}
+		if name, ok := al[s]; ok {
+			it.title = name
+			it.desc = s
+		}
+		items[i] = it
+	}
+	return items
+}
+
 func loadAgents() string {
 	a := readLines(filepath.Join(configDir(), "agents"))
 	if len(a) == 0 {
