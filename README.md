@@ -1,102 +1,92 @@
-<div align="center">
+# skillswoop
 
-# ▓▒░ skillswoop ░▒▓
+A terminal UI (and CLI) for managing agent skills for Claude Code and Codex. It is a
+front-end over [`npx skills`](https://github.com/vercel-labs/skills): remember skill
+repositories, pick individual skills from a repo, install them into a project for one or
+more agents, and update them from GitHub.
 
-**A neon TUI for managing agent skills — swoop them straight into Claude Code & Codex.**
-
-`swoop` is a friendly cyberpunk front-end over [`npx skills`](https://github.com/vercel-labs/skills).
-Remember your favorite skill repos, drill into individual skills, and install only the
-ones you want — into the current project, for every agent you target.
-
-</div>
-
-```
-▓▒░  S W O O P  ░▒▓   // skillswoop · swoop skills into claude + codex
-══════════════════════════════════════════════════════════════════════
-▸ INSTALL · mattpocock/skills   SPACE marks · ENTER installs marked
-
-  ◉ diagnose          Disciplined diagnosis loop for hard bugs…
-▌ ○ tdd               Test-driven development with red-green-refactor…
-  ◉ grill-with-docs   Grilling session that challenges your plan…
-  ○ to-issues         Break a plan into independently-grabbable issues…
-```
-
-## Features
-
-- **Cyberpunk Bubble Tea TUI** — gradient banner, neon panels, multi-select with checkboxes.
-- **Per-skill install** — pick a repo, then mark exactly the skills you want (not the whole set).
-- **Targets multiple agents** — installs to `./.claude/skills/<name>` and `./.agents/skills/<name>` (Codex) at once.
-- **Project-local by default** — lands in the current directory; `-g` for global.
-- **Updates from GitHub** — `swoop update` pulls the latest for skills in this folder; `swoop update --all` refreshes every folder you've installed into.
-- **Browse skills.sh** — search the directory and remember new sources.
-- **Scriptable** — every action also works non-interactively (great for CI / dotfiles).
+The command is `swoop`.
 
 ## Install
 
-### Homebrew (macOS / Linux)
+Homebrew:
+
 ```sh
 brew install StreamlinedStartup/tap/swoop
 ```
 
-### go install
+go install (installs a binary named `skillswoop`):
+
 ```sh
 go install github.com/StreamlinedStartup/skillswoop@latest
-# installs a binary named `skillswoop`; symlink it to `swoop` if you like:
-ln -sf "$(go env GOPATH)/bin/skillswoop" "$(go env GOPATH)/bin/swoop"
 ```
 
-### Prebuilt binaries
-Grab a tarball for your OS/arch from the [Releases](https://github.com/StreamlinedStartup/skillswoop/releases) page and put `swoop` on your `PATH`.
+Prebuilt binaries: see [Releases](https://github.com/StreamlinedStartup/skillswoop/releases).
 
-### From source
+From source:
+
 ```sh
 git clone https://github.com/StreamlinedStartup/skillswoop
 cd skillswoop && go build -o swoop .
 ```
 
-### Prerequisites
-- **Node.js / npx** — used to run `npx skills` (the actual installer).
-- **gh** and/or **git** — for listing/cloning repos (private repos work when `gh` is authenticated). Optional but recommended.
+### Requirements
+
+- `node` / `npx` — used to run `npx skills`, which performs the actual install/update.
+- `gh` and/or `git` — used to list and clone repositories. `gh` (authenticated) is required for private repos. Optional otherwise.
 
 ## Usage
 
-Just run it:
-```sh
-swoop
-```
+Run `swoop` with no arguments for the TUI.
 
 | Key | Action |
 | --- | --- |
-| `↑ ↓` / `j k` | move |
+| `↑`/`↓`, `j`/`k` | move |
 | `space` | mark (multi-select) |
 | `a` | mark all / none |
-| `enter` | select / install |
-| `tab` | toggle PROJECT ⟷ GLOBAL scope |
+| `enter` | select / confirm |
+| `ctrl+r` | rename a source (set a display alias) |
+| `tab` | toggle project / global scope |
 | `esc` | back · `q` quit |
 
-### Scriptable subcommands
-Everything the TUI does is also a plain command:
+Every action is also available as a non-interactive command:
+
 ```sh
-swoop add mattpocock/skills            # remember a source
-swoop use mattpocock/skills -- --skill diagnose --skill tdd -y
-swoop update                           # update skills in the current folder
-swoop update --all                     # update every folder you've installed into
-swoop -g update                        # update your global skills
-swoop browse marketing                 # search skills.sh
+swoop add owner/repo                              # remember a source
+swoop use owner/repo -- --skill A --skill B -y    # install specific skills
+swoop update                                      # update skills in the current folder
+swoop update --all                                # update every folder you've installed into
+swoop -g update                                   # update global skills
+swoop browse <query>                              # search skills.sh
 swoop list | swoop remove | swoop agents claude-code codex
 swoop --version
 ```
 
+## Where skills are installed
+
+By default skills install into the current directory:
+
+- Claude Code: `./.claude/skills/<name>`
+- Codex: `./.agents/skills/<name>`
+
+`-g` installs to the global agent directories instead. Updates are tracked per directory
+via the `skills-lock.json` that `npx skills` writes.
+
+## Files
+
+- Config: `~/.config/swoop/` — `sources`, `agents`, `projects`, `aliases`
+- Library (skills moved out by `swoop stash`): `~/.local/share/swoop/library/`
+- Engine cache: `~/Library/Caches/swoop/` (macOS) or `$XDG_CACHE_HOME/swoop/`
+
+Existing `~/.config/ccskill` configuration is copied to `~/.config/swoop` on first run.
+
 ## How it works
 
-`swoop` is a single self-contained binary: a Go/[Bubble Tea](https://github.com/charmbracelet/bubbletea)
-TUI with a small Bash **engine embedded** inside it (via `go:embed`). On first run the engine is
-extracted to your cache dir and executed; it orchestrates `npx skills`, `gh`/`git`, and Node for
-listing. Any CLI arguments pass straight through to the engine, so scripted use behaves identically.
-
-Config lives in `~/.config/swoop/` (`sources`, `agents`, `projects`) and copied skills in
-`~/.local/share/swoop/library/`. Existing `ccskill` config is migrated automatically on first run.
+`swoop` is a single Go binary: a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+TUI with a Bash engine embedded via `go:embed`. On first run the engine is written to the
+cache directory and executed; it orchestrates `npx skills`, `gh`/`git`, and Node. Any
+command-line arguments are passed straight through to the engine.
 
 ## License
 
-[MIT](LICENSE) © StreamlinedStartup
+[MIT](LICENSE)

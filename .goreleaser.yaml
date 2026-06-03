@@ -41,22 +41,22 @@ changelog:
 
 # Homebrew tap — requires a HOMEBREW_TAP_GITHUB_TOKEN secret with write access to
 # the StreamlinedStartup/homebrew-tap repo (the default GITHUB_TOKEN can't push
-# cross-repo). If the secret is absent, comment this block out for the first release.
-brews:
-  - name: swoop
-    repository:
-      owner: StreamlinedStartup
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: "https://github.com/StreamlinedStartup/skillswoop"
-    description: "skillswoop — neon TUI skill manager for Claude Code + Codex"
-    license: "MIT"
-    dependencies:
-      - name: node
-    install: |
-      bin.install "swoop"
-    test: |
-      system "#{bin}/swoop", "--version"
+# cross-repo). Enabled once the secret is set; commented for the first release.
+# brews:
+#   - name: swoop
+#     repository:
+#       owner: StreamlinedStartup
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+#     homepage: "https://github.com/StreamlinedStartup/skillswoop"
+#     description: "skillswoop — TUI/CLI skill manager for Claude Code + Codex"
+#     license: "MIT"
+#     dependencies:
+#       - name: node
+#     install: |
+#       bin.install "swoop"
+#     test: |
+#       system "#{bin}/swoop", "--version"
 
 release:
   github:
