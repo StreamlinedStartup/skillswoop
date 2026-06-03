@@ -1,0 +1,12 @@
+# build artifacts
+/dist/
+/swoop
+/swoop-*
+*.test
+*.out
+coverage*
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/

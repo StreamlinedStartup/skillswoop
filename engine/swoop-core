@@ -1,0 +1,573 @@
+#!/usr/bin/env bash
+#
+# swoop — a friendly front-end over `npx skills` (github.com/vercel-labs/skills)
+#
+# Run it with NO arguments for an interactive menu. It remembers your favorite
+# skill SOURCES (a repo, a URL, or a local skill) and your default AGENTS, and
+# can browse the skills.sh directory to discover new ones — then installs to
+# every agent you target (Claude Code + Codex by default).
+#
+# Interactive menu (just run `swoop`):
+#   • Install skills           pick a saved source, then pick skills
+#   • Browse skills.sh         search the directory, add repos to favorites
+#   • Add a source             owner/repo | git URL | local path
+#   • Remove a source
+#   • Tidy global skills       MOVE existing ~/.claude & ~/.codex skills into
+#                              the library (one-time declutter; confirms first)
+#   • Default agents           view / change targets
+#
+# Scriptable subcommands (optional):
+#   swoop add <src>...       remember a source (local skills are COPIED in)
+#   swoop use <src>...       install from a source now (also `swoop <src>`)
+#   swoop update [skill...]  pull latest from GitHub for skills in this folder (-g for global)
+#   swoop update --all       refresh every folder you've installed into
+#   swoop browse [query]     search skills.sh
+#   swoop list | remove | agents
+#
+# Flags: -g/--global, --link (symlink vs copy), --no-copy (when adding a local
+#        skill), --dry-run, and `-- <args>` passed straight to `npx skills`.
+#
+# Nicest with `gum` installed (brew install gum); falls back to fzf, then to a
+# plain numbered prompt. Browse needs node/npx (you already have it).
+
+set -euo pipefail
+[ -n "${SWOOP_DEBUG:-}" ] && set -x                 # SWOOP_DEBUG=1 traces execution
+ERRTO=/dev/null; [ -n "${SWOOP_DEBUG:-}" ] && ERRTO=/dev/stderr
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/swoop"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/swoop"
+# one-time migration from the project's former name (ccskill) so existing users
+# keep their saved sources/agents/projects + copied library.
+_OLDCFG="${XDG_CONFIG_HOME:-$HOME/.config}/ccskill"
+_OLDDATA="${XDG_DATA_HOME:-$HOME/.local/share}/ccskill"
+[ ! -d "$CONFIG_DIR" ] && [ -d "$_OLDCFG" ] && cp -R "$_OLDCFG" "$CONFIG_DIR" 2>/dev/null || true
+[ ! -d "$DATA_DIR" ]   && [ -d "$_OLDDATA" ] && cp -R "$_OLDDATA" "$DATA_DIR" 2>/dev/null || true
+SOURCES="$CONFIG_DIR/sources"
+AGENTS_FILE="$CONFIG_DIR/agents"
+PROJECTS="$CONFIG_DIR/projects"          # dirs we've installed into (for `update --all`)
+LIBRARY="$DATA_DIR/library"
+DEFAULT_AGENTS="claude-code codex"
+SKILLS_CMD=(npx --yes skills)               # override via $SWOOP_SKILLS_CMD
+SEARCH_API="${SWOOP_SEARCH_API:-https://skills.sh}"
+
+SCOPE="project"; COPY_LOCAL=1; COPY=1; DRYRUN="${SWOOP_DRYRUN:-}"
+declare -a EXTRA=() ARGS=()
+
+# ---- pretty -------------------------------------------------------------
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  BOLD=$'\033[1m'; DIM=$'\033[2m'; GRN=$'\033[32m'; YLW=$'\033[33m'; RED=$'\033[31m'; RST=$'\033[0m'
+else BOLD=; DIM=; GRN=; YLW=; RED=; RST=; fi
+die()  { printf '%serror:%s %s\n' "$RED" "$RST" "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+# portable temp (BSD/macOS mktemp needs an explicit template; GNU is fine with one too)
+mktmp()  { mktemp     "${TMPDIR:-/tmp}/swoop.XXXXXXXX"; }
+mktmpd() { mktemp -d  "${TMPDIR:-/tmp}/swoop.XXXXXXXX"; }
+tty_ok()   { { true </dev/tty; } 2>/dev/null; }
+read_tty() { if tty_ok; then IFS= read -r "$1" </dev/tty; else IFS= read -r "$1"; fi; }
+
+# ---- UI layer: gum > fzf > numbered -------------------------------------
+_numbered() {  # $1 prompt  $2 mode(one|multi); candidates on stdin, chosen on stdout
+  local p="$1" mode="$2" i=1 line names=()
+  while IFS= read -r line; do names[i]="$line"; i=$((i+1)); done
+  [ "${#names[@]}" -eq 0 ] && return 0
+  printf '%s%s%s\n' "$BOLD" "$p" "$RST" >&2
+  local j; for j in "${!names[@]}"; do printf '%s%3d)%s %s\n' "$DIM" "$j" "$RST" "${names[$j]}" >&2; done
+  if [ "$mode" = multi ]; then printf 'Select (space-separated numbers): ' >&2
+  else printf 'Choose one (number): ' >&2; fi
+  local sel n; read_tty sel || return 0
+  for n in $sel; do [ -n "${names[$n]:-}" ] && printf '%s\n' "${names[$n]}"; done
+}
+# viewport height that FITS the terminal — a gum --height taller than the visible
+# area makes its in-place redraw overflow, smearing/overlapping rows as you scroll.
+_vh() {
+  local want=15 rows avail
+  rows="$(tput lines 2>/dev/null || echo 24)"; case "$rows" in ''|*[!0-9]*) rows=24 ;; esac
+  avail=$((rows - 6))                       # leave room for header + prompt + gum's help line
+  [ "$avail" -lt "$want" ] && want="$avail"
+  [ "$want" -lt 3 ] && want=3
+  printf '%s' "$want"
+}
+menu()  {  # multi-select; prompt=$1
+  if   have gum; then gum choose --no-limit --header "$1" --height "$(_vh)"
+  elif have fzf; then fzf --multi --reverse --height=70% --border --prompt="$1 > " \
+                          --header=$'TAB select  \xc2\xb7  ENTER confirm  \xc2\xb7  ESC cancel'
+  else _numbered "$1" multi; fi
+}
+menu1() {  # single-select; prompt=$1
+  if   have gum; then gum choose --header "$1" --height "$(_vh)"
+  elif have fzf; then fzf --reverse --height=70% --border --prompt="$1 > "
+  else _numbered "$1" one; fi
+}
+ui_input() {  # $1 prompt  $2 placeholder; prints entered value
+  if have gum; then gum input --prompt "$1 " --placeholder "${2:-}"
+  else printf '%s ' "$1" >&2; local v; read_tty v || return 1; printf '%s' "$v"; fi
+}
+ui_confirm() {  # $1 question
+  [ -n "${SWOOP_ASSUME_YES:-}" ] && return 0      # front-end already confirmed
+  if have gum; then gum confirm "$1"
+  else printf '%s [y/N] ' "$1" >&2; local a; read_tty a || return 1
+       case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac; fi
+}
+run_with_spin() {  # $1 title, rest = command
+  if have gum; then gum spin --title "$1" --show-output -- "${@:2}"; else shift; "$@"; fi
+}
+
+# ---- helpers ------------------------------------------------------------
+load_agents() { if [ -s "$AGENTS_FILE" ]; then cat "$AGENTS_FILE"; else printf '%s\n' $DEFAULT_AGENTS; fi; }
+save_source()  { mkdir -p "$CONFIG_DIR"; touch "$SOURCES"; grep -qxF "$1" "$SOURCES" || printf '%s\n' "$1" >> "$SOURCES"; }
+save_project() { mkdir -p "$CONFIG_DIR"; touch "$PROJECTS"; grep -qxF "$1" "$PROJECTS" || printf '%s\n' "$1" >> "$PROJECTS"; }
+is_local() { case "$1" in /*|./*|../*|"~"|"~"/*) return 0 ;; esac; [ -e "$1" ]; }
+resolve_local() {
+  local p="$1"; case "$p" in "~") p="$HOME" ;; "~"/*) p="$HOME/${p#~/}" ;; esac
+  [ -e "$p" ] || die "path not found: $p"
+  if [ -f "$p" ]; then [ "$(basename "$p")" = SKILL.md ] || die "not a SKILL.md or directory: $p"; p="$(dirname "$p")"; fi
+  [ -d "$p" ] || die "not a directory: $p"; ( cd "$p" && pwd )
+}
+run_skills() { if [ -n "$DRYRUN" ]; then printf '%s[dry-run]%s ' "$YLW" "$RST"; printf '%q ' "$@"; echo; else "$@"; fi; }
+install_from() {
+  local src="$1"; shift || true
+  local a; local -a cmd=( "${SKILLS_CMD[@]}" add "$src" )
+  for a in $(load_agents); do cmd+=( -a "$a" ); done
+  if [ "$SCOPE" = global ]; then
+    cmd+=( -g )
+  else
+    # project scope: install into the CURRENT directory's agent folders, creating
+    # them first so `skills` never falls back to a global install (its -y auto-detect
+    # picks global when the cwd doesn't already look like a project).
+    local d
+    for a in $(load_agents); do
+      d="$(project_dir_for "$a")" || continue
+      [ -n "$DRYRUN" ] || mkdir -p "$d"
+    done
+  fi
+  [ "$COPY" = 1 ] && cmd+=( --copy )
+  [ "${#EXTRA[@]}" -gt 0 ] && cmd+=( "${EXTRA[@]}" )
+  [ "$#" -gt 0 ] && cmd+=( "$@" )
+  printf '%s>>%s installing from %s%s%s' "$BOLD" "$RST" "$GRN" "$src" "$RST"
+  [ "$SCOPE" = global ] && printf ' %s(global)%s\n' "$DIM" "$RST" || printf ' %sinto %s%s\n' "$DIM" "$PWD" "$RST"
+  run_skills "${cmd[@]}"
+  # remember this dir so `swoop update --all` can refresh it later
+  if [ -z "$DRYRUN" ] && [ "$SCOPE" != global ]; then save_project "$PWD"; fi
+}
+
+# parse owner/repo[#branch] out of a source (shorthand, https, git@, tree URL)
+gh_slug() {
+  local s="$1"; s="${s%.git}"
+  case "$s" in
+    *github.com[:/]*) s="${s##*github.com}"; s="${s#[:/]}" ;;
+    http*|git@*) return 1 ;;            # some non-GitHub host
+  esac
+  case "$s" in */*) : ;; *) return 1 ;; esac
+  local owner="${s%%/*}" rest="${s#*/}"
+  local repo="${rest%%/*}"
+  [ -n "$owner" ] && [ -n "$repo" ] || return 1
+  case "$rest" in
+    */tree/*) local b="${rest#*tree/}"; b="${b%%/*}"; printf '%s/%s#%s\n' "$owner" "$repo" "$b" ;;
+    *) printf '%s/%s\n' "$owner" "$repo" ;;
+  esac
+}
+
+# node: walk a directory, print "name<TAB>description" for each SKILL.md found
+NODE_WALK='
+const fs=require("fs"),path=require("path");
+const strip=s=>s.trim().replace(/^["\x27]|["\x27]$/g,"");
+function field(front,key){
+  const lines=front.split("\n");
+  const i=lines.findIndex(l=>new RegExp("^"+key+":").test(l));
+  if(i<0) return "";
+  let first=lines[i].replace(new RegExp("^"+key+":\\s*"),"").trim();
+  if(first && !/^[>|][-+]?$/.test(first)) return strip(first);
+  const out=[];
+  for(let j=i+1;j<lines.length;j++){
+    if(/^\s+\S/.test(lines[j])) out.push(lines[j].trim());
+    else if(/^\s*$/.test(lines[j])) continue; else break;
+  }
+  return out.join(" ");
+}
+function walk(d,depth){
+  if(depth>6) return;
+  let ents; try{ents=fs.readdirSync(d,{withFileTypes:true});}catch{return;}
+  for(const e of ents){
+    if(e.name===".git") continue;
+    const p=path.join(d,e.name);
+    if(e.isDirectory()) walk(p,depth+1);
+    else if(e.name.toLowerCase()==="skill.md"){
+      let raw=""; try{raw=fs.readFileSync(p,"utf8");}catch{}
+      const parts=raw.split(/^---\s*$/m);
+      const front=parts.length>=3?parts[1]:raw;
+      let name=field(front,"name")||path.basename(path.dirname(p));
+      let desc=field(front,"description");
+      if(desc.length>100) desc=desc.slice(0,99)+"\u2026";
+      process.stdout.write(name+"\t"+desc+"\n");
+    }
+  }
+}
+walk(process.argv[1],0);
+'
+
+# enumerate SKILL.md via the GitHub trees API and fetch ONLY those files (no full
+# clone; needs just gh+node; works for private repos since gh is authenticated).
+# prints "name<TAB>desc"; nonzero if it cannot.
+list_skills_via_api() {
+  local slug="$1" branch="$2"
+  [ -n "$branch" ] || branch="$(gh api "repos/$slug" --jq .default_branch 2>"$ERRTO")" || return 1
+  [ -n "$branch" ] || return 1
+  local paths
+  paths="$(gh api "repos/$slug/git/trees/$branch?recursive=1" \
+      --jq '.tree[]|select((.path|ascii_downcase|endswith("skill.md")) and .type=="blob")|.path' \
+      2>"$ERRTO")" || return 1
+  [ -n "$paths" ] || return 1
+  local tmp; tmp="$(mktmpd)" || return 1
+  local p
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    mkdir -p "$tmp/$(dirname "$p")"
+    gh api "repos/$slug/contents/$p?ref=$branch" -H "Accept: application/vnd.github.raw" \
+        > "$tmp/$p" 2>"$ERRTO" || :
+  done <<< "$paths"
+  node -e "$NODE_WALK" "$tmp"; local rc=$?
+  rm -rf "$tmp"; return $rc
+}
+
+# list skills in a source as "name<TAB>desc"; nonzero if it cannot
+list_skills_in() {
+  local src="$1"
+  if is_local "$src"; then
+    local base; base="$(resolve_local "$src" 2>/dev/null)" || return 1
+    node -e "$NODE_WALK" "$base"; return 0
+  fi
+  have node || return 1
+  local slug; slug="$(gh_slug "$src")" || return 1
+  local branch=""; case "$slug" in *\#*) branch="${slug#*#}"; slug="${slug%#*}" ;; esac
+
+  # primary: shallow clone (fast, single op; gh handles private repos, git covers public)
+  local tmp ok=1; tmp="$(mktmpd)" || return 1
+  if have gh; then
+    local -a g=( repo clone "$slug" "$tmp" -- --depth 1 --quiet )
+    [ -n "$branch" ] && g+=( --branch "$branch" )
+    gh "${g[@]}" 2>"$ERRTO" && ok=0
+  fi
+  if [ "$ok" != 0 ] && have git; then               # fall back to plain git (public repos)
+    local -a g=( clone --depth 1 --quiet ); [ -n "$branch" ] && g+=( --branch "$branch" )
+    git "${g[@]}" "https://github.com/$slug.git" "$tmp" 2>"$ERRTO" && ok=0
+  fi
+  if [ "$ok" = 0 ]; then
+    node -e "$NODE_WALK" "$tmp"; local rc=$?
+    rm -rf "$tmp"; return $rc
+  fi
+  rm -rf "$tmp"
+
+  # fallback: no git / clone blocked — enumerate + fetch only SKILL.md via the GitHub API
+  if have gh; then list_skills_via_api "$slug" "$branch" && return 0; fi
+  return 1
+}
+
+# install from a source: drill into its skills, let the user pick, install those
+install_source() {
+  local src="$1" tmp; tmp="$(mktmp)"
+  printf '%sreading skills from %s …%s\n' "$DIM" "$src" "$RST" >&2
+  if ! list_skills_in "$src" > "$tmp" 2>"$ERRTO" || [ ! -s "$tmp" ]; then
+    rm -f "$tmp"
+    printf '%sCouldn'\''t list individual skills for %s.%s\n' "$YLW" "$src" "$RST" >&2
+    printf '%s(try SWOOP_DEBUG=1 to see clone/API errors)%s\n' "$DIM" "$RST" >&2
+    if ui_confirm "Install the ENTIRE source instead?"; then install_from "$src"; fi
+    return
+  fi
+  local lines picks disp
+  lines="$(awk -F '\t' '{ if($2!="") printf "%s\t%s\n",$1,$2; else print $1 }' "$tmp")"; rm -f "$tmp"
+  # short, single-line headers — long ones wrap and leave gum redraw ghosts when scrolling
+  disp="$(gh_slug "$src" 2>/dev/null || true)"; [ -n "$disp" ] || disp="$src"
+  # multi-select first (Space/x marks several). If you just hit Enter without
+  # marking anything, gum's no-limit mode returns empty — so fall back to a
+  # single-select that installs the highlighted row instead of bailing out.
+  picks="$(printf '%s\n' "$lines" | menu "$disp — Space marks · Enter installs")" || true
+  if [ -z "$picks" ]; then
+    picks="$(printf '%s\n' "$lines" | menu1 "$disp — Enter installs one")" || true
+  fi
+  [ -n "$picks" ] || { printf '%sNothing selected.%s\n' "$YLW" "$RST"; return; }
+  local -a skargs=(); local nm rest
+  while IFS=$'\t' read -r nm rest; do [ -n "$nm" ] && skargs+=( --skill "$nm" ); done <<< "$picks"
+  [ "${#skargs[@]}" -gt 0 ] || return
+  install_from "$src" "${skargs[@]}" -y
+}
+
+
+# node one-liner: query skills.sh and print "source<TAB>name<TAB>installs"
+NODE_SEARCH='
+const q = process.argv[1] || "";
+const base = process.env.SWOOP_SEARCH_API || "https://skills.sh";
+const url = `${base}/api/search?q=${encodeURIComponent(q)}&limit=40`;
+fetch(url).then(r => r.json()).then(d => {
+  const arr = Array.isArray(d) ? d : (d.skills || d.results || d.data || []);
+  for (const s of arr) {
+    const src = s.source || s.repo || "";
+    const name = s.name || s.slug || "";
+    const inst = s.installs ?? s.installCount ?? "";
+    if (src) process.stdout.write(`${src}\t${name}\t${inst}\n`);
+  }
+}).catch(e => { process.stderr.write("search failed: " + e.message + "\n"); process.exit(3); });
+'
+
+# ---- commands -----------------------------------------------------------
+cmd_add() {
+  [ "$#" -ge 1 ] || die "usage: swoop add <owner/repo | url | path> ..."
+  mkdir -p "$CONFIG_DIR" "$LIBRARY"; local s
+  for s in "$@"; do
+    if is_local "$s"; then
+      local dir; dir="$(resolve_local "$s")"
+      if [ -f "$dir/SKILL.md" ] && [ "$COPY_LOCAL" = 1 ]; then
+        local name dst; name="$(basename "$dir")"; dst="$LIBRARY/$name"
+        rm -rf "$dst"; cp -R "$dir" "$dst"; save_source "$dst"
+        printf '  %scopied%s %s -> library, remembered\n' "$GRN" "$RST" "$name"
+      else save_source "$dir"; printf '  %sremembered%s local path %s\n' "$GRN" "$RST" "$dir"; fi
+    else save_source "$s"; printf '  %sremembered%s %s\n' "$GRN" "$RST" "$s"; fi
+  done
+}
+
+cmd_remove() {
+  [ -s "$SOURCES" ] || { echo "no saved sources."; return 0; }
+  local chosen
+  if [ "$#" -ge 1 ]; then chosen="$(printf '%s\n' "$@")"
+  else chosen="$(menu "remove a source" < "$SOURCES")" || true; fi
+  [ -n "$chosen" ] || return 0
+  printf '%s\n' "$chosen" | while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    grep -vxF "$s" "$SOURCES" > "$SOURCES.tmp" 2>/dev/null || : > "$SOURCES.tmp"
+    mv "$SOURCES.tmp" "$SOURCES"; printf '  removed %s\n' "$s"
+  done
+}
+
+cmd_agents() {
+  mkdir -p "$CONFIG_DIR"
+  if [ "$#" -eq 0 ]; then load_agents; return 0; fi
+  : > "$AGENTS_FILE"; local a; for a in "$@"; do printf '%s\n' "$a" >> "$AGENTS_FILE"; done
+  printf 'default agents set: %s\n' "$*"
+}
+
+cmd_list() {
+  printf '%sAgents%s  %s\n%sScope%s   %s\n\n' "$BOLD" "$RST" "$(load_agents | tr '\n' ' ')" "$BOLD" "$RST" "$SCOPE"
+  printf '%sSources%s  %s%s%s\n' "$BOLD" "$RST" "$DIM" "$SOURCES" "$RST"
+  if [ -s "$SOURCES" ]; then while IFS= read -r s; do printf '  %s\n' "$s"; done < "$SOURCES"
+  else printf '  (none — add with the menu or: swoop add <src>)\n'; fi
+}
+
+# pull the latest from each skill's GitHub source. `skills` records every install in
+# a skills-lock.json (source + content hash); `skills update` re-checks those sources
+# and refreshes anything that changed. Project scope updates the current dir; -g the global set.
+cmd_update() {
+  # `--all` / `all`: walk every project dir we've installed into and update each
+  local a; for a in "$@"; do case "$a" in --all|all) update_all; return ;; esac; done
+
+  local -a cmd=( "${SKILLS_CMD[@]}" update )
+  if [ "$SCOPE" = global ]; then cmd+=( -g ); else cmd+=( -p ); fi
+  cmd+=( -y )
+  for a in "$@"; do [ "$a" = --all ] || [ "$a" = all ] || cmd+=( "$a" ); done   # optional skill names
+  if [ "$SCOPE" != global ] && [ ! -f skills-lock.json ]; then
+    printf '%sNo skills-lock.json here — nothing installed in %s to update.%s\n' "$YLW" "$PWD" "$RST" >&2
+    printf '%s(cd into a project where you installed skills, run `swoop update --all`, or use -g.)%s\n' "$DIM" "$RST" >&2
+    return 0
+  fi
+  printf '%s>>%s updating %s from their GitHub sources…\n' "$BOLD" "$RST" \
+    "$([ "$SCOPE" = global ] && echo 'global skills' || echo "skills in $PWD")"
+  run_skills "${cmd[@]}"
+}
+
+# update every known project dir (recorded at install time), pruning ones that are
+# gone or no longer hold a skills-lock.json so the registry stays honest.
+update_all() {
+  if [ ! -s "$PROJECTS" ]; then
+    printf '%sNo known project dirs yet — install something first, then `swoop update --all`.%s\n' "$YLW" "$RST" >&2
+    return 0
+  fi
+  # slurp the registry FIRST — running `skills update` inside a `while read < file`
+  # loop lets it consume the file's remaining lines from stdin (eating other dirs).
+  local dir kept=0 done=0; local -a dirs=() keep=()
+  while IFS= read -r dir; do [ -n "$dir" ] && dirs+=( "$dir" ); done < "$PROJECTS"
+  for dir in "${dirs[@]}"; do
+    if [ ! -d "$dir" ]; then
+      printf '  %sdropped%s %s %s(gone)%s\n' "$YLW" "$RST" "$dir" "$DIM" "$RST"; continue
+    fi
+    keep+=( "$dir" ); kept=$((kept+1))
+    if [ ! -f "$dir/skills-lock.json" ]; then
+      printf '  %sskip%s %s %s(no skills installed)%s\n' "$DIM" "$RST" "$dir" "$DIM" "$RST"; continue
+    fi
+    printf '%s>>%s updating %s\n' "$BOLD" "$RST" "$dir"
+    if [ -n "$DRYRUN" ]; then run_skills "${SKILLS_CMD[@]}" update -p -y
+    else ( cd "$dir" && "${SKILLS_CMD[@]}" update -p -y </dev/null ) || printf '  %sfailed%s %s\n' "$RED" "$RST" "$dir"; fi
+    done=$((done+1))
+  done
+  # rewrite registry without the dirs that disappeared
+  if [ "$kept" -gt 0 ]; then printf '%s\n' "${keep[@]}" > "$PROJECTS"; else : > "$PROJECTS"; fi
+  printf '%sDone.%s updated %s dir(s); %s known.\n' "$GRN" "$RST" "$done" "$kept"
+}
+
+cmd_browse() {
+  have node || { printf '%sBrowse needs node/npx on PATH.%s\n' "$YLW" "$RST"; return 0; }
+  local q; if [ "$#" -ge 1 ]; then q="$*"; else q="$(ui_input 'Search skills.sh:' 'keyword (blank = top results)')" || return 0; fi
+  local tmp; tmp="$(mktmp)"
+  if ! run_with_spin "Searching skills.sh…" node -e "$NODE_SEARCH" "$q" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"; printf '%sSearch failed — check your network or try a keyword.%s\n' "$RED" "$RST"; return 0
+  fi
+  if [ ! -s "$tmp" ]; then rm -f "$tmp"; echo "No results."; return 0; fi
+  local lines picks; lines="$(awk -F '\t' '{printf "%-34s %s (%s installs)\n",$1,$2,$3}' "$tmp")"; rm -f "$tmp"
+  picks="$(printf '%s\n' "$lines" | menu "skills.sh — pick repos to remember")" || true
+  [ -n "$picks" ] || { echo "Nothing selected."; return 0; }
+  local srcs; srcs="$(printf '%s\n' "$picks" | awk '{print $1}' | sort -u)"
+  local -a srcl=(); local s
+  while IFS= read -r s; do [ -n "$s" ] && { save_source "$s"; srcl+=("$s"); printf '  %sremembered%s %s\n' "$GRN" "$RST" "$s"; }; done <<< "$srcs"
+  if ui_confirm "Install from the selected repo(s) now?"; then
+    for s in "${srcl[@]}"; do install_source "$s"; done
+  fi
+}
+
+# global skills dir for an agent (only the ones we'll touch when tidying)
+global_dir_for() {
+  case "$1" in
+    claude-code) printf '%s/.claude/skills\n' "$HOME" ;;
+    codex)       printf '%s/.codex/skills\n'  "$HOME" ;;
+    cursor)      printf '%s/.cursor/skills\n' "$HOME" ;;
+    *) return 1 ;;
+  esac
+}
+
+# project (current-directory) skills dir for an agent — where a non-global install lands
+project_dir_for() {
+  case "$1" in
+    claude-code) printf '.claude/skills\n' ;;
+    codex)       printf '.agents/skills\n' ;;
+    cursor)      printf '.cursor/skills\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+# move existing GLOBAL skills out of the auto-scanned dirs and into the library
+cmd_stash() {
+  mkdir -p "$LIBRARY"
+  local a dir d nm; local -a moves=()
+  for a in $(load_agents); do
+    dir="$(global_dir_for "$a")" || { printf '  %sskip %s (tidy not configured for it)%s\n' "$DIM" "$a" "$RST" >&2; continue; }
+    [ -d "$dir" ] || continue
+    for d in "$dir"/*/; do
+      [ -d "$d" ] && [ -f "${d}SKILL.md" ] || continue
+      moves+=( "${d%/}|$(basename "$d")|$a" )
+    done
+  done
+  if [ "${#moves[@]}" -eq 0 ]; then echo "No global skills found to tidy."; return 0; fi
+
+  printf '%sThese global skills will be MOVED into your library%s\n' "$BOLD" "$RST"
+  printf '(out of the auto-scanned dirs so they stop loading everywhere; re-add per project):\n'
+  local m src; for m in "${moves[@]}"; do IFS='|' read -r src nm a <<< "$m"
+    printf '  %-26s %sfrom %s%s\n' "$nm" "$DIM" "$src" "$RST"; done
+  if [ -n "$DRYRUN" ]; then printf '%s(dry-run — nothing moved)%s\n' "$YLW" "$RST"; return 0; fi
+  ui_confirm "Move these ${#moves[@]} skill(s) into the library now?" || { echo "aborted."; return 0; }
+
+  for m in "${moves[@]}"; do IFS='|' read -r src nm a <<< "$m"
+    local dst="$LIBRARY/$nm"
+    if [ -e "$dst" ]; then printf '  %sskip%s %s (already in library)\n' "$YLW" "$RST" "$nm"; continue; fi
+    if mv "$src" "$dst" 2>/dev/null; then save_source "$dst"; printf '  %smoved%s %s\n' "$GRN" "$RST" "$nm"
+    else printf '  %sfailed%s %s\n' "$RED" "$RST" "$nm"; fi
+  done
+  printf '%sDone.%s Your global dirs are lean; nothing loads everywhere unless re-added.\n' "$GRN" "$RST"
+}
+
+# ---- interactive home screen --------------------------------------------
+cmd_menu() {
+  while :; do
+    local action
+    action="$(printf '%s\n' \
+      "Install skills    (pick a source, then pick skills)" \
+      "Update skills     (pull latest from GitHub into this folder)" \
+      "Update all folders (refresh every folder you've installed into)" \
+      "Browse skills.sh  (discover & remember new sources)" \
+      "Add a source      (repo, URL, or local path)" \
+      "Remove a source" \
+      "Tidy global skills (move ~/.claude & ~/.codex skills into the library)" \
+      "Default agents:   $(load_agents | tr '\n' ' ')" \
+      "Quit" | menu1 "swoop")" || return 0
+    case "$action" in
+      "Install skills"*)   menu_install ;;
+      "Update all folders"*) update_all ;;
+      "Update skills"*)    cmd_update ;;
+      "Browse skills.sh"*) cmd_browse ;;
+      "Add a source"*)     menu_add ;;
+      "Remove a source"*)  cmd_remove ;;
+      "Tidy global skills"*) cmd_stash ;;
+      "Default agents:"*)  menu_agents ;;
+      "Quit"|"") return 0 ;;
+    esac
+    echo
+  done
+}
+menu_install() {
+  if [ ! -s "$SOURCES" ]; then
+    printf '%sNo saved sources yet — browse or add one first.%s\n' "$YLW" "$RST"
+    if ui_confirm "Browse skills.sh now?"; then cmd_browse; else menu_add; fi; return
+  fi
+  # pick ONE source to drill into (single-select: Enter chooses the highlighted row).
+  # auto-pick when there is only one saved source — no point prompting.
+  local n src
+  n="$(awk 'NF{c++} END{print c+0}' "$SOURCES")"
+  if [ "${n:-0}" -le 1 ]; then
+    src="$(awk 'NF{print; exit}' "$SOURCES")"
+  else
+    src="$(menu1 "pick a source  (Enter to choose)" < "$SOURCES")" || true
+  fi
+  [ -n "$src" ] || { printf '%sNo source selected.%s\n' "$YLW" "$RST"; return; }
+  install_source "$src"
+}
+menu_add() {
+  local s; s="$(ui_input 'Repo, URL, or local path:' 'owner/repo | https://… | ~/path/to/skill')" || return
+  [ -n "$s" ] || return; cmd_add "$s"
+}
+menu_agents() {
+  local cur; cur="$(load_agents | tr '\n' ' ')"
+  local line; line="$(ui_input "Agents [now: $cur]:" 'space-separated, e.g. claude-code codex cursor')" || return
+  [ -n "$line" ] || return
+  # shellcheck disable=SC2086
+  cmd_agents $line
+}
+
+usage() { sed -n '3,38p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; }
+
+# ---- arg parsing --------------------------------------------------------
+[ -n "${SWOOP_SKILLS_CMD:-}" ] && read -r -a SKILLS_CMD <<< "$SWOOP_SKILLS_CMD"
+cmd=""; pt=0
+while [ $# -gt 0 ]; do
+  if [ "$pt" = 1 ]; then EXTRA+=("$1"); shift; continue; fi
+  case "$1" in
+    --) pt=1 ;;
+    -g|--global) SCOPE=global ;;
+    --link)      COPY=0 ;;
+    --no-copy)   COPY_LOCAL=0 ;;
+    --dry-run)   DRYRUN=1 ;;
+    -h|--help)   usage; exit 0 ;;
+    add|save|use|install|update|upgrade|browse|list|ls|remove|rm|agents|stash|migrate|menu|_skills|_search|_sources|_projects)
+      if [ -z "$cmd" ]; then cmd="$1"; else ARGS+=("$1"); fi ;;
+    *) ARGS+=("$1") ;;
+  esac
+  shift
+done
+[ -z "$cmd" ] && { if [ "${#ARGS[@]}" -gt 0 ]; then cmd=use; else cmd=menu; fi; }
+
+case "$cmd" in
+  menu)            cmd_menu ;;
+  add|save)        cmd_add ${ARGS[@]+"${ARGS[@]}"} ;;
+  use|install)     [ "${#ARGS[@]}" -ge 1 ] || die "usage: swoop use <source> ..."
+                   for s in "${ARGS[@]}"; do
+                     if [ "${#EXTRA[@]}" -gt 0 ]; then install_from "$s"; else install_source "$s"; fi
+                   done ;;
+  update|upgrade)  cmd_update ${ARGS[@]+"${ARGS[@]}"} ;;
+  browse)          cmd_browse ${ARGS[@]+"${ARGS[@]}"} ;;
+  stash|migrate)   cmd_stash ;;
+  list|ls)         cmd_list ;;
+  remove|rm)       cmd_remove ${ARGS[@]+"${ARGS[@]}"} ;;
+  agents)          cmd_agents ${ARGS[@]+"${ARGS[@]}"} ;;
+  # ---- machine-readable helpers for the TUI front-end (stable, undocumented) ----
+  _skills)         [ "${#ARGS[@]}" -ge 1 ] || die "usage: swoop _skills <source>"
+                   list_skills_in "${ARGS[0]}" ;;                 # prints name<TAB>desc
+  _search)         have node || exit 3
+                   node -e "$NODE_SEARCH" "${ARGS[*]:-}" ;;       # prints source<TAB>name<TAB>installs
+  _sources)        [ -s "$SOURCES" ] && cat "$SOURCES" || true ;;
+  _projects)       [ -s "$PROJECTS" ] && cat "$PROJECTS" || true ;;
+  *) usage; exit 1 ;;
+esac

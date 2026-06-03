@@ -1,0 +1,66 @@
+version: 2
+project_name: skillswoop
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: swoop
+    binary: swoop
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: swoop
+    name_template: >-
+      swoop_{{ .Version }}_{{ .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+# Homebrew tap — requires a HOMEBREW_TAP_GITHUB_TOKEN secret with write access to
+# the StreamlinedStartup/homebrew-tap repo (the default GITHUB_TOKEN can't push
+# cross-repo). If the secret is absent, comment this block out for the first release.
+brews:
+  - name: swoop
+    repository:
+      owner: StreamlinedStartup
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/StreamlinedStartup/skillswoop"
+    description: "skillswoop — neon TUI skill manager for Claude Code + Codex"
+    license: "MIT"
+    dependencies:
+      - name: node
+    install: |
+      bin.install "swoop"
+    test: |
+      system "#{bin}/swoop", "--version"
+
+release:
+  github:
+    owner: StreamlinedStartup
+    name: skillswoop
+  draft: false
+  prerelease: auto
