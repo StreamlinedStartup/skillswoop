@@ -2,6 +2,8 @@ package main
 
 import (
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 type item struct {
@@ -20,10 +22,17 @@ type picker struct {
 	width  int // inner content width
 	height int // visible rows
 	multi  bool
+	titleW int // widest title (display cells) — used to align the description column
 }
 
 func newPicker(items []item, multi bool) *picker {
-	return &picker{items: items, multi: multi}
+	p := &picker{items: items, multi: multi}
+	for _, it := range items {
+		if w := lipgloss.Width(it.title); w > p.titleW {
+			p.titleW = w
+		}
+	}
+	return p
 }
 
 func (p *picker) setSize(w, h int) {
@@ -155,6 +164,12 @@ func (p *picker) renderRow(i int) string {
 		}
 	}
 
+	titleStyle := rowNormal
+	descStyle := rowDesc
+	if cur {
+		titleStyle, descStyle = rowCursor, rowDescCur
+	}
+
 	// width budget: width - bar(2) - box(2 if multi)
 	avail := p.width - 2
 	if p.multi {
@@ -164,37 +179,31 @@ func (p *picker) renderRow(i int) string {
 		avail = 6
 	}
 
-	title := it.title
-	// reserve room for an inline dim description after a separator
-	descSep := ""
-	if it.desc != "" {
-		// give the title up to ~40% then description fills the rest
-		tw := avail * 2 / 5
-		if tw < len([]rune(title)) {
-			// keep full short titles; only cap long ones
-		}
-		title = truncate(title, avail)
-		used := len([]rune(title))
-		rest := avail - used - 3
-		if rest > 4 {
-			d := truncate(it.desc, rest)
-			if cur {
-				descSep = "   " + rowDescCur.Render(d)
-			} else {
-				descSep = "   " + rowDesc.Render(d)
-			}
-		}
-	} else {
-		title = truncate(title, avail)
+	// single-column rows (no description): just the title
+	if it.desc == "" {
+		return bar + box + titleStyle.Render(truncate(it.title, avail))
 	}
 
-	var ts string
-	if cur {
-		ts = rowCursor.Render(title)
-	} else {
-		ts = rowNormal.Render(title)
+	// two-column rows: pad every title to a shared column so descriptions align.
+	const gap = 2 // spaces between the title column and the description
+	col := p.titleW
+	if max := avail - 8 - gap; col > max { // always leave room for some description
+		col = max
 	}
-	return bar + box + ts + descSep
+	if col < 1 {
+		col = 1
+	}
+	t := truncate(it.title, col)
+	pad := col - lipgloss.Width(t)
+	if pad < 0 {
+		pad = 0
+	}
+	descW := avail - col - gap
+	desc := ""
+	if descW > 1 {
+		desc = strings.Repeat(" ", gap) + descStyle.Render(truncate(it.desc, descW))
+	}
+	return bar + box + titleStyle.Render(t) + strings.Repeat(" ", pad) + desc
 }
 
 // scrollFooter is a 1-line indicator the view can append (e.g. "  3/29 ▾").

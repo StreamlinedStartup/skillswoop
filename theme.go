@@ -133,6 +133,15 @@ func truncate(s string, max int) string {
 	return string(r[:max-1]) + "…"
 }
 
+// padRight pads s with spaces to a target display width (no-op if already wider).
+func padRight(s string, n int) string {
+	w := lipgloss.Width(s)
+	if w >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-w)
+}
+
 // padLines pads a block of text to exactly h lines (prevents panel jitter).
 func padLines(s string, h int) string {
 	lines := strings.Split(s, "\n")

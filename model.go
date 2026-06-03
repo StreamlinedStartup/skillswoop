@@ -105,7 +105,8 @@ func newModel() *model {
 	m.entries = menuEntries()
 	items := make([]item, len(m.entries))
 	for i, e := range m.entries {
-		items[i] = item{id: e.title, title: e.icon + "  " + e.title, desc: e.desc}
+		// pad the icon to a uniform 2 cells so the titles line up regardless of glyph width
+		items[i] = item{id: e.title, title: padRight(e.icon, 2) + "  " + e.title, desc: e.desc}
 	}
 	m.menu = newPicker(items, false)
 	return m
