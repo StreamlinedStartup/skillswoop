@@ -41,7 +41,7 @@ func heading(label, sub string) string {
 func (m *model) buildBody() string {
 	// defensive: list screens must never render before their picker exists
 	switch m.screen {
-	case scSources, scSkills, scBrowseResults, scRemove:
+	case scSources, scSkills, scStarred, scBrowseResults, scRemove:
 		if m.pick == nil {
 			return heading("LOADING", "") + "\n\n" + rowDesc.Render("  …")
 		}
@@ -63,7 +63,17 @@ func (m *model) buildBody() string {
 			rowDesc.Render("ENTER save · ESC cancel · blank = show the repo URL")
 
 	case scSkills:
-		return heading("INSTALL · "+short(m.curSource), "SPACE marks · ENTER installs marked") + "\n\n" +
+		sub := "SPACE marks · s stars · / filters · ENTER installs marked"
+		if m.filtering {
+			return heading("INSTALL · "+short(m.curSource), sub) + "\n" +
+				m.input.View() + "\n" +
+				m.pick.view() + "\n" + m.pick.scrollFooter()
+		}
+		return heading("INSTALL · "+short(m.curSource), sub) + "\n\n" +
+			m.pick.view() + "\n" + m.pick.scrollFooter()
+
+	case scStarred:
+		return heading("STARRED skills", "SPACE marks · ENTER installs marked") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scBrowseResults:
@@ -129,7 +139,13 @@ func (m *model) statusBar() string {
 	case scRename:
 		keys = key("⏎", "save") + key("esc", "cancel")
 	case scSkills:
-		keys = key("↑↓", "move") + key("space", "mark") + key("a", "all") + key("⏎", "install") + key("esc", "back")
+		if m.filtering {
+			keys = key("type", "filter") + key("⏎", "list") + key("esc", "clear")
+		} else {
+			keys = key("↑↓", "move") + key("space", "mark") + key("s", "star") + key("/", "filter") + key("a", "all") + key("⏎", "install") + key("esc", "back")
+		}
+	case scStarred:
+		keys = key("↑↓", "move") + key("space", "mark") + key("a", "all") + key("⏎", "install") + key("esc", "menu")
 	case scBrowseResults, scRemove:
 		keys = key("↑↓", "move") + key("space", "mark") + key("⏎", "go") + key("esc", "back")
 	case scBrowseInput, scAdd, scAgents:

@@ -130,6 +130,21 @@ func sourceItems() []item {
 	return items
 }
 
+func starredItems() []item {
+	stars := loadStars()
+	items := make([]item, len(stars))
+	for i, st := range stars {
+		it := st
+		if it.desc == "" {
+			it.desc = short(it.source)
+		} else {
+			it.desc = short(it.source) + "  ·  " + it.desc
+		}
+		items[i] = it
+	}
+	return items
+}
+
 func loadAgents() string {
 	a := readLines(filepath.Join(configDir(), "agents"))
 	if len(a) == 0 {

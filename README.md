@@ -69,6 +69,8 @@ Run `swoop` with no arguments for the TUI.
 | `↑`/`↓`, `j`/`k` | move |
 | `space` | mark (multi-select) |
 | `a` | mark all / none |
+| `s` | star / unstar the highlighted skill in a repo skill list |
+| `/` | fuzzy-filter skills in a repo skill list |
 | `enter` | select / confirm |
 | `ctrl+r` | rename a source (set a display alias) |
 | `tab` | toggle project / global scope |
@@ -83,6 +85,9 @@ swoop update                                      # update skills in the current
 swoop update --all                                # update every folder you've installed into
 swoop -g update                                   # update global skills
 swoop browse <query>                              # search skills.sh
+swoop stars                                       # list starred skills
+swoop star owner/repo tdd review                  # star skills for quick reuse
+swoop unstar owner/repo tdd                       # remove starred skills
 swoop list | swoop remove | swoop agents claude-code codex
 swoop --version
 ```
@@ -99,7 +104,7 @@ via the `skills-lock.json` that `npx skills` writes.
 
 ## Files
 
-- Config: `~/.config/swoop/` — `sources`, `agents`, `projects`, `aliases`
+- Config: `~/.config/swoop/` — `sources`, `agents`, `projects`, `aliases`, `stars`
 - Library (skills moved out by `swoop stash`): `~/.local/share/swoop/library/`
 - Engine cache: `~/Library/Caches/swoop/` (macOS) or `$XDG_CACHE_HOME/swoop/`
 

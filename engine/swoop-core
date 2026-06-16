@@ -22,6 +22,9 @@
 #   swoop update [skill...]  pull latest from GitHub for skills in this folder (-g for global)
 #   swoop update --all       refresh every folder you've installed into
 #   swoop browse [query]     search skills.sh
+#   swoop stars              list starred source/skill pairs
+#   swoop star <src> <skill> remember skills for quick reuse
+#   swoop unstar <src> <skill>...
 #   swoop list | remove | agents
 #
 # Flags: -g/--global, --link (symlink vs copy), --no-copy (when adding a local
@@ -45,6 +48,7 @@ _OLDDATA="${XDG_DATA_HOME:-$HOME/.local/share}/ccskill"
 SOURCES="$CONFIG_DIR/sources"
 AGENTS_FILE="$CONFIG_DIR/agents"
 PROJECTS="$CONFIG_DIR/projects"          # dirs we've installed into (for `update --all`)
+STARS="$CONFIG_DIR/stars"                # source<TAB>skill<TAB>description
 LIBRARY="$DATA_DIR/library"
 DEFAULT_AGENTS="claude-code codex"
 SKILLS_CMD=(npx --yes skills)               # override via $SWOOP_SKILLS_CMD
@@ -116,6 +120,32 @@ run_with_spin() {  # $1 title, rest = command
 load_agents() { if [ -s "$AGENTS_FILE" ]; then cat "$AGENTS_FILE"; else printf '%s\n' $DEFAULT_AGENTS; fi; }
 save_source()  { mkdir -p "$CONFIG_DIR"; touch "$SOURCES"; grep -qxF "$1" "$SOURCES" || printf '%s\n' "$1" >> "$SOURCES"; }
 save_project() { mkdir -p "$CONFIG_DIR"; touch "$PROJECTS"; grep -qxF "$1" "$PROJECTS" || printf '%s\n' "$1" >> "$PROJECTS"; }
+save_star() {
+  local src="$1" skill="$2" desc="${3:-}" tmp
+  mkdir -p "$CONFIG_DIR"; touch "$STARS"; tmp="$(mktmp)"
+  awk -F '\t' -v src="$src" -v skill="$skill" '!(($1==src)&&($2==skill))' "$STARS" > "$tmp" 2>/dev/null || :
+  printf '%s\t%s\t%s\n' "$src" "$skill" "$desc" >> "$tmp"
+  mv "$tmp" "$STARS"
+}
+remove_star() {
+  local src="$1" skill="$2" tmp
+  [ -f "$STARS" ] || return 0
+  tmp="$(mktmp)"
+  awk -F '\t' -v src="$src" -v skill="$skill" '!(($1==src)&&($2==skill))' "$STARS" > "$tmp" 2>/dev/null || :
+  mv "$tmp" "$STARS"
+}
+prune_stars_for_sources() {
+  [ -f "$STARS" ] || return 0
+  [ "$#" -gt 0 ] || return 0
+  local tmp src awk_srcs=""
+  tmp="$(mktmp)"
+  for src in "$@"; do awk_srcs="${awk_srcs}${src}"$'\n'; done
+  awk -F '\t' -v doomed="$awk_srcs" '
+    BEGIN { n=split(doomed, srcs, "\n"); for (i=1; i<=n; i++) if (srcs[i]!="") rm[srcs[i]]=1 }
+    !($1 in rm)
+  ' "$STARS" > "$tmp" 2>/dev/null || :
+  mv "$tmp" "$STARS"
+}
 is_local() { case "$1" in /*|./*|../*|"~"|"~"/*) return 0 ;; esac; [ -e "$1" ]; }
 resolve_local() {
   local p="$1"; case "$p" in "~") p="$HOME" ;; "~"/*) p="$HOME/${p#~/}" ;; esac
@@ -330,11 +360,14 @@ cmd_remove() {
   if [ "$#" -ge 1 ]; then chosen="$(printf '%s\n' "$@")"
   else chosen="$(menu "remove a source" < "$SOURCES")" || true; fi
   [ -n "$chosen" ] || return 0
+  local -a removed=()
   printf '%s\n' "$chosen" | while IFS= read -r s; do
     [ -n "$s" ] || continue
     grep -vxF "$s" "$SOURCES" > "$SOURCES.tmp" 2>/dev/null || : > "$SOURCES.tmp"
     mv "$SOURCES.tmp" "$SOURCES"; printf '  removed %s\n' "$s"
   done
+  while IFS= read -r s; do [ -n "$s" ] && removed+=( "$s" ); done <<< "$chosen"
+  [ "${#removed[@]}" -gt 0 ] && prune_stars_for_sources "${removed[@]}"
 }
 
 cmd_agents() {
@@ -349,6 +382,43 @@ cmd_list() {
   printf '%sSources%s  %s%s%s\n' "$BOLD" "$RST" "$DIM" "$SOURCES" "$RST"
   if [ -s "$SOURCES" ]; then while IFS= read -r s; do printf '  %s\n' "$s"; done < "$SOURCES"
   else printf '  (none — add with the menu or: swoop add <src>)\n'; fi
+}
+
+cmd_stars() {
+  if [ -s "$STARS" ]; then cat "$STARS"; else printf 'no starred skills.\n'; fi
+}
+
+cmd_star() {
+  [ "$#" -ge 2 ] || die "usage: swoop star <source> <skill>..."
+  local src="$1"; shift
+  local tmp; tmp="$(mktmp)"
+  if ! list_skills_in "$src" > "$tmp" 2>"$ERRTO" || [ ! -s "$tmp" ]; then
+    rm -f "$tmp"; die "could not list skills for $src"
+  fi
+  local skill line desc failed=0
+  for skill in "$@"; do
+    line="$(awk -F '\t' -v skill="$skill" '$1==skill {print; exit}' "$tmp")"
+    if [ -z "$line" ]; then
+      printf '%serror:%s skill not found in %s: %s\n' "$RED" "$RST" "$src" "$skill" >&2
+      failed=1
+      continue
+    fi
+    desc="${line#*$'\t'}"
+    [ "$desc" = "$line" ] && desc=""
+    save_star "$src" "$skill" "$desc"
+    printf '  %sstarred%s %s from %s\n' "$GRN" "$RST" "$skill" "$src"
+  done
+  rm -f "$tmp"
+  [ "$failed" = 0 ] || return 1
+}
+
+cmd_unstar() {
+  [ "$#" -ge 2 ] || die "usage: swoop unstar <source> <skill>..."
+  local src="$1" skill; shift
+  for skill in "$@"; do
+    remove_star "$src" "$skill"
+    printf '  unstarred %s from %s\n' "$skill" "$src"
+  done
 }
 
 # pull the latest from each skill's GitHub source. `skills` records every install in
@@ -552,7 +622,7 @@ while [ $# -gt 0 ]; do
     --no-copy)   COPY_LOCAL=0 ;;
     --dry-run)   DRYRUN=1 ;;
     -h|--help)   usage; exit 0 ;;
-    add|save|use|install|update|upgrade|browse|list|ls|remove|rm|agents|stash|migrate|menu|_skills|_search|_sources|_projects)
+    add|save|use|install|update|upgrade|browse|list|ls|stars|star|unstar|remove|rm|agents|stash|migrate|menu|_skills|_search|_sources|_projects)
       if [ -z "$cmd" ]; then cmd="$1"; else ARGS+=("$1"); fi ;;
     *) ARGS+=("$1") ;;
   esac
@@ -569,6 +639,9 @@ case "$cmd" in
                    done ;;
   update|upgrade)  cmd_update ${ARGS[@]+"${ARGS[@]}"} ;;
   browse)          cmd_browse ${ARGS[@]+"${ARGS[@]}"} ;;
+  stars)           cmd_stars ;;
+  star)            cmd_star ${ARGS[@]+"${ARGS[@]}"} ;;
+  unstar)          cmd_unstar ${ARGS[@]+"${ARGS[@]}"} ;;
   stash|migrate)   cmd_stash ;;
   list|ls)         cmd_list ;;
   remove|rm)       cmd_remove ${ARGS[@]+"${ARGS[@]}"} ;;

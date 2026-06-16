@@ -12,18 +12,19 @@ import (
 type screen int
 
 const (
-	scMenu screen = iota
-	scSources       // install: pick a source
-	scSkills        // install: multi-select skills
-	scBrowseInput   // browse: query
-	scBrowseResults // browse: multi-select repos
-	scAdd           // add a source
-	scAgents        // edit default agents
-	scRemove        // remove sources (multi)
-	scRename        // give a source a friendly display name
-	scConfirm       // generic yes/no
-	scRunning       // spinner while an op runs
-	scResult        // scrollable output of an op
+	scMenu          screen = iota
+	scSources              // install: pick a source
+	scSkills               // install: multi-select skills
+	scStarred              // install: multi-select starred skills
+	scBrowseInput          // browse: query
+	scBrowseResults        // browse: multi-select repos
+	scAdd                  // add a source
+	scAgents               // edit default agents
+	scRemove               // remove sources (multi)
+	scRename               // give a source a friendly display name
+	scConfirm              // generic yes/no
+	scRunning              // spinner while an op runs
+	scResult               // scrollable output of an op
 )
 
 // menu entries
@@ -35,7 +36,7 @@ type menuEntry struct {
 }
 
 type model struct {
-	width, height int
+	width, height  int
 	innerW, innerH int
 
 	screen screen
@@ -50,10 +51,11 @@ type model struct {
 
 	entries []menuEntry
 
-	global    bool   // scope toggle (project default)
-	curSource string // source being drilled into
-	renameURL string // source whose alias is being edited (scRename)
-	busyTitle string
+	global      bool   // scope toggle (project default)
+	curSource   string // source being drilled into
+	renameURL   string // source whose alias is being edited (scRename)
+	filtering   bool   // true while slash-filtering repo skills
+	busyTitle   string
 	resultTitle string
 	resultErr   bool
 	confirmMsg  string
@@ -73,6 +75,7 @@ type searchMsg struct {
 	items []item
 	err   error
 }
+type starredMsg struct{ items []item }
 type opDoneMsg struct {
 	title  string
 	output string
@@ -124,6 +127,10 @@ func loadSkillsCmd(src string) tea.Cmd {
 		items, err := listSkills(src)
 		return skillsMsg{items, err}
 	}
+}
+
+func loadStarredCmd() tea.Cmd {
+	return func() tea.Msg { return starredMsg{starredItems()} }
 }
 
 func searchCmd(q string) tea.Cmd {

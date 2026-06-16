@@ -9,6 +9,7 @@ import (
 func menuEntries() []menuEntry {
 	return []menuEntry{
 		{"◢◤", "Install skills", "pick a source, then swoop specific skills into this folder", actInstall},
+		{"★", "Starred skills", "install skills you've starred for quick reuse", actStarred},
 		{"⟳", "Update folder", "pull latest from GitHub for skills in the current dir", actUpdateHere},
 		{"⟳⟳", "Update all folders", "refresh every folder you've installed into", actUpdateAll},
 		{"⌖", "Browse skills.sh", "search the directory and remember new sources", actBrowse},
@@ -18,6 +19,13 @@ func menuEntries() []menuEntry {
 		{"⤓", "Tidy global skills", "move ~/.claude & ~/.codex skills into the library", actTidy},
 		{"⏻", "Quit", "exit swoop", actQuit},
 	}
+}
+
+func actStarred(m *model) (tea.Model, tea.Cmd) {
+	m.prev = scMenu
+	m.busyTitle = "loading starred skills"
+	m.screen = scRunning
+	return m, loadStarredCmd()
 }
 
 func (m *model) enterPicker(p *picker) {
@@ -111,6 +119,11 @@ func (m *model) installSelected() tea.Cmd {
 	if len(sel) == 0 {
 		return flashFor("nothing marked — press SPACE to mark, then ENTER", 0)
 	}
+	if m.screen == scStarred {
+		m.busyTitle = "installing " + itoa(len(sel)) + " starred skill(s)"
+		m.screen = scRunning
+		return installGroupedCmd("install starred", m.global, sel)
+	}
 	args := []string{}
 	if m.global {
 		args = append(args, "-g")
@@ -123,6 +136,44 @@ func (m *model) installSelected() tea.Cmd {
 	m.busyTitle = "installing " + itoa(len(sel)) + " skill(s) from " + short(m.curSource)
 	m.screen = scRunning
 	return opCmd("install", args...)
+}
+
+func installGroupedCmd(title string, global bool, items []item) tea.Cmd {
+	return func() tea.Msg {
+		groups := map[string][]string{}
+		var order []string
+		for _, it := range items {
+			if it.source == "" || it.id == "" {
+				continue
+			}
+			if _, ok := groups[it.source]; !ok {
+				order = append(order, it.source)
+			}
+			groups[it.source] = append(groups[it.source], it.id)
+		}
+		var out strings.Builder
+		var firstErr error
+		for _, src := range order {
+			args := []string{}
+			if global {
+				args = append(args, "-g")
+			}
+			args = append(args, "use", src, "--")
+			for _, skill := range groups[src] {
+				args = append(args, "--skill", skill)
+			}
+			args = append(args, "-y")
+			chunk, err := core(args...)
+			if out.Len() > 0 {
+				out.WriteByte('\n')
+			}
+			out.WriteString(stripANSI(chunk))
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return opDoneMsg{title: title, output: out.String(), err: firstErr}
+	}
 }
 
 func short(src string) string {
