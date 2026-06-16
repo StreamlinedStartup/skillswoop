@@ -499,6 +499,30 @@ func (m *model) onFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pick.setFilter("")
 		m.layout()
 		return m, nil
+	case "up", "k":
+		m.filtering = false
+		m.input.Blur()
+		m.layout()
+		m.pick.move(-1)
+		return m, nil
+	case "down", "j":
+		m.filtering = false
+		m.input.Blur()
+		m.layout()
+		m.pick.move(1)
+		return m, nil
+	case "home":
+		m.filtering = false
+		m.input.Blur()
+		m.layout()
+		m.pick.home()
+		return m, nil
+	case "end":
+		m.filtering = false
+		m.input.Blur()
+		m.layout()
+		m.pick.end()
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)

@@ -38,9 +38,37 @@ func core(args ...string) (string, error) {
 	return string(out), err
 }
 
-var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\a]*(\a|\x1b\\)|[\r\x07]`)
+var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\a]*(\a|\x1b\\)|[\x07]`)
 
-func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
+func stripANSI(s string) string {
+	return collapseTerminalControls(ansiRE.ReplaceAllString(s, ""))
+}
+
+func collapseTerminalControls(s string) string {
+	var out strings.Builder
+	var line []rune
+	flush := func() {
+		out.WriteString(string(line))
+		line = line[:0]
+	}
+	for _, r := range s {
+		switch r {
+		case '\r':
+			line = line[:0]
+		case '\n':
+			flush()
+			out.WriteByte('\n')
+		case '\b':
+			if len(line) > 0 {
+				line = line[:len(line)-1]
+			}
+		default:
+			line = append(line, r)
+		}
+	}
+	flush()
+	return out.String()
+}
 
 // ---- config readers (plain-text files the engine maintains) -------------
 func configDir() string {
@@ -159,7 +187,7 @@ func listSkills(src string) ([]item, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseTabbed(out, 2), nil
+	return dedupeItems(parseTabbed(out, 2)), nil
 }
 
 // searchSkills hits skills.sh via the engine and returns repos to remember.
@@ -189,7 +217,7 @@ func searchSkills(q string) ([]item, error) {
 		}
 		items = append(items, item{id: src, title: src, desc: desc})
 	}
-	return items, nil
+	return dedupeItems(items), nil
 }
 
 // parseTabbed turns "a<TAB>b" lines into items (id=title=col1, desc=col2).
@@ -207,4 +235,21 @@ func parseTabbed(out string, _ int) []item {
 		items = append(items, it)
 	}
 	return items
+}
+
+func dedupeItems(items []item) []item {
+	seen := map[string]bool{}
+	out := items[:0]
+	for _, it := range items {
+		key := it.source + "\t" + it.id
+		if it.source == "" {
+			key = it.id
+		}
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, it)
+	}
+	return out
 }
