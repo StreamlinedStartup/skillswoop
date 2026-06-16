@@ -43,6 +43,7 @@ changelog:
 # HOMEBREW_TAP_GITHUB_TOKEN secret (a PAT with Contents:write on that repo).
 brews:
   - name: swoop
+    directory: Formula
     repository:
       owner: StreamlinedStartup
       name: homebrew-tap
