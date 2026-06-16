@@ -69,18 +69,20 @@ sequenceDiagram
 |---------|-------------|---------|
 | `loadSourcesCmd()` | Read `~/.config/swoop/sources` | `sourcesMsg` |
 | `loadSkillsCmd(src)` | Ask engine for skills via `_skills` | `skillsMsg` |
+| `loadStarredCmd()` | Read `~/.config/swoop/stars` | `starredMsg` |
 | `searchCmd(q)` | Ask engine via `_search` | `searchMsg` |
 | `opCmd(title, args...)` | Run any engine subcommand | `opDoneMsg` |
 | `flashFor(text, duration)` | Show a transient status message | `flashMsg` → `clearFlashMsg` |
 
 ## Screen state machine
 
-The TUI has 11 screens. `model.screen` is an enum (`scMenu`, `scSources`, etc.) that controls what `View()` renders and what keys `onKey()` responds to.
+The TUI has 12 screens. `model.screen` is an enum (`scMenu`, `scSources`, etc.) that controls what `View()` renders and what keys `onKey()` responds to.
 
 ```mermaid
 stateDiagram-v2
     [*] --> scMenu
     scMenu --> scSources: "Install skills"
+    scMenu --> scStarred: "Starred skills"
     scMenu --> scBrowseInput: "Browse"
     scMenu --> scAdd: "Add a source"
     scMenu --> scRemove: "Remove"
@@ -93,6 +95,7 @@ stateDiagram-v2
     scRunning --> scResult: opDoneMsg
     scSkills --> scRunning: install selected → opCmd
     scSkills --> scRunning: esc → loadSourcesCmd
+    scStarred --> scRunning: install selected → grouped engine calls
 
     scSources --> scRename: ctrl+r
     scRename --> scSources: save/cancel
@@ -136,6 +139,7 @@ type model struct {
     vp     viewport.Model
     global bool         // project vs global scope toggle
     curSource string    // source being drilled into
+    filtering bool      // slash-filter mode in the repo skills picker
     // ... result/confirm state, flash message, agents
 }
 ```
@@ -174,12 +178,13 @@ Layout math lives in `layout()` — calculates `innerW`/`innerH` accounting for 
 
 Defines the 9 main menu entries as `menuEntry` structs, each with an `act` function that returns a `(tea.Model, tea.Cmd)`. Also contains `installSelected()` which builds the engine command from marked skills.
 
-### `picker.go` (251 lines)
+### `picker.go`
 
 A self-contained, windowed, optionally multi-select list widget. Handles:
 
 - **Virtual scrolling**: `top`/`cursor`/`height` math in `clampWindow()` — the cursor never leaves the visible window
 - **Multi-select**: `toggle()`, `selectAll()`, `selected()`, `selectedCount()`
+- **Fuzzy filtering**: keeps all rows as backing state and filters visible indexes so marks and stars survive filtering
 - **Two-column rendering**: titles padded to `titleW` so descriptions align
 - **Scroll indicators**: `scrollFooter()` shows `▲ 3/29 ▼` + marked count
 
@@ -196,6 +201,7 @@ The bridge to the engine:
 | `loadSources()` / `loadProjects()` / `loadAgents()` | Read config files |
 | `loadAliases()` / `saveAlias()` | Read/write source display names |
 | `sourceItems()` | Build source list with aliases applied |
+| Star helpers (`stars.go`) | Read/write starred source/skill pairs |
 | `listSkills(src)` | Call `_skills`, parse tab-separated output |
 | `searchSkills(q)` | Call `_search`, parse tab-separated output |
 

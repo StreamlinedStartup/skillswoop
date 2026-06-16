@@ -44,6 +44,7 @@ var (
 	barStyle    = lipgloss.NewStyle().Foreground(cPink).Bold(true)
 	checkOn     = lipgloss.NewStyle().Foreground(cGreen).Bold(true)
 	checkOff    = lipgloss.NewStyle().Foreground(cFaint)
+	starStyle   = lipgloss.NewStyle().Foreground(cYellow).Bold(true)
 	titleStyle  = lipgloss.NewStyle().Foreground(cPink).Bold(true)
 	okStyle     = lipgloss.NewStyle().Foreground(cGreen).Bold(true)
 	errStyle    = lipgloss.NewStyle().Foreground(cRed).Bold(true)

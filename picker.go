@@ -7,32 +7,57 @@ import (
 )
 
 type item struct {
-	id    string
-	title string
-	desc  string
-	sel   bool
+	id     string
+	title  string
+	desc   string
+	source string
+	sel    bool
+	star   bool
 }
 
 // picker is a self-contained, windowed, optionally multi-select list.
 // It owns its own scroll math so long lists never smear (the bug we hit in gum).
 type picker struct {
-	items  []item
-	cursor int
-	top    int // index of first visible row
-	width  int // inner content width
-	height int // visible rows
-	multi  bool
-	titleW int // widest title (display cells) — used to align the description column
+	items   []item
+	visible []int
+	filter  string
+	cursor  int
+	top     int // index of first visible row
+	width   int // inner content width
+	height  int // visible rows
+	multi   bool
+	titleW  int // widest title (display cells) — used to align the description column
 }
 
 func newPicker(items []item, multi bool) *picker {
 	p := &picker{items: items, multi: multi}
-	for _, it := range items {
+	p.rebuildVisible()
+	return p
+}
+
+func (p *picker) rebuildVisible() {
+	p.visible = rankedMatches(p.items, p.filter)
+	p.titleW = 0
+	for _, idx := range p.visible {
+		it := p.items[idx]
 		if w := lipgloss.Width(it.title); w > p.titleW {
 			p.titleW = w
 		}
 	}
-	return p
+	if p.cursor >= len(p.visible) {
+		p.cursor = len(p.visible) - 1
+	}
+	if p.cursor < 0 {
+		p.cursor = 0
+	}
+	p.clampWindow()
+}
+
+func (p *picker) setFilter(q string) {
+	p.filter = q
+	p.cursor = 0
+	p.top = 0
+	p.rebuildVisible()
 }
 
 func (p *picker) setSize(w, h int) {
@@ -44,24 +69,24 @@ func (p *picker) setSize(w, h int) {
 	p.clampWindow()
 }
 
-func (p *picker) len() int { return len(p.items) }
+func (p *picker) len() int { return len(p.visible) }
 
 func (p *picker) move(d int) {
-	if len(p.items) == 0 {
+	if len(p.visible) == 0 {
 		return
 	}
 	p.cursor += d
 	if p.cursor < 0 {
 		p.cursor = 0
 	}
-	if p.cursor >= len(p.items) {
-		p.cursor = len(p.items) - 1
+	if p.cursor >= len(p.visible) {
+		p.cursor = len(p.visible) - 1
 	}
 	p.clampWindow()
 }
 
 func (p *picker) home() { p.cursor = 0; p.clampWindow() }
-func (p *picker) end()  { p.cursor = len(p.items) - 1; p.clampWindow() }
+func (p *picker) end()  { p.cursor = len(p.visible) - 1; p.clampWindow() }
 
 // clampWindow keeps the cursor inside the visible window [top, top+height).
 func (p *picker) clampWindow() {
@@ -77,7 +102,7 @@ func (p *picker) clampWindow() {
 	if p.top < 0 {
 		p.top = 0
 	}
-	max := len(p.items) - p.height
+	max := len(p.visible) - p.height
 	if max < 0 {
 		max = 0
 	}
@@ -87,22 +112,31 @@ func (p *picker) clampWindow() {
 }
 
 func (p *picker) toggle() {
-	if p.multi && p.cursor >= 0 && p.cursor < len(p.items) {
-		p.items[p.cursor].sel = !p.items[p.cursor].sel
+	if p.multi && p.cursor >= 0 && p.cursor < len(p.visible) {
+		idx := p.visible[p.cursor]
+		p.items[idx].sel = !p.items[idx].sel
 	}
 }
 
 func (p *picker) selectAll(v bool) {
-	for i := range p.items {
-		p.items[i].sel = v
+	for _, idx := range p.visible {
+		p.items[idx].sel = v
 	}
 }
 
 func (p *picker) current() (item, bool) {
-	if p.cursor < 0 || p.cursor >= len(p.items) {
+	if p.cursor < 0 || p.cursor >= len(p.visible) {
 		return item{}, false
 	}
-	return p.items[p.cursor], true
+	return p.items[p.visible[p.cursor]], true
+}
+
+func (p *picker) replaceCurrent(it item) {
+	if p.cursor < 0 || p.cursor >= len(p.visible) {
+		return
+	}
+	p.items[p.visible[p.cursor]] = it
+	p.rebuildVisible()
 }
 
 func (p *picker) selected() []item {
@@ -125,15 +159,25 @@ func (p *picker) selectedCount() int {
 	return n
 }
 
+func (p *picker) visibleSelectedCount() int {
+	n := 0
+	for _, idx := range p.visible {
+		if p.items[idx].sel {
+			n++
+		}
+	}
+	return n
+}
+
 // view renders exactly p.height rows (padded), with scroll indicators.
 func (p *picker) view() string {
-	if len(p.items) == 0 {
+	if len(p.visible) == 0 {
 		return rowDesc.Render("  (empty)")
 	}
 	var b strings.Builder
 	end := p.top + p.height
-	if end > len(p.items) {
-		end = len(p.items)
+	if end > len(p.visible) {
+		end = len(p.visible)
 	}
 	for i := p.top; i < end; i++ {
 		b.WriteString(p.renderRow(i))
@@ -147,7 +191,7 @@ func (p *picker) view() string {
 }
 
 func (p *picker) renderRow(i int) string {
-	it := p.items[i]
+	it := p.items[p.visible[i]]
 	cur := i == p.cursor
 
 	bar := "  "
@@ -163,6 +207,10 @@ func (p *picker) renderRow(i int) string {
 			box = checkOff.Render("○ ")
 		}
 	}
+	star := ""
+	if it.star {
+		star = starStyle.Render("★ ")
+	}
 
 	titleStyle := rowNormal
 	descStyle := rowDesc
@@ -170,9 +218,12 @@ func (p *picker) renderRow(i int) string {
 		titleStyle, descStyle = rowCursor, rowDescCur
 	}
 
-	// width budget: width - bar(2) - box(2 if multi)
+	// width budget: width - bar(2) - box(2 if multi) - star marker
 	avail := p.width - 2
 	if p.multi {
+		avail -= 2
+	}
+	if it.star {
 		avail -= 2
 	}
 	if avail < 6 {
@@ -181,7 +232,7 @@ func (p *picker) renderRow(i int) string {
 
 	// single-column rows (no description): just the title
 	if it.desc == "" {
-		return bar + box + titleStyle.Render(truncate(it.title, avail))
+		return bar + box + star + titleStyle.Render(truncate(it.title, avail))
 	}
 
 	// two-column rows: pad every title to a shared column so descriptions align.
@@ -203,12 +254,12 @@ func (p *picker) renderRow(i int) string {
 	if descW > 1 {
 		desc = strings.Repeat(" ", gap) + descStyle.Render(truncate(it.desc, descW))
 	}
-	return bar + box + titleStyle.Render(t) + strings.Repeat(" ", pad) + desc
+	return bar + box + star + titleStyle.Render(t) + strings.Repeat(" ", pad) + desc
 }
 
 // scrollFooter is a 1-line indicator the view can append (e.g. "  3/29 ▾").
 func (p *picker) scrollFooter() string {
-	if len(p.items) == 0 {
+	if len(p.visible) == 0 {
 		return ""
 	}
 	pos := scrollHint.Render
@@ -217,13 +268,16 @@ func (p *picker) scrollFooter() string {
 		left = "▲ "
 	}
 	right := ""
-	if p.top+p.height < len(p.items) {
+	if p.top+p.height < len(p.visible) {
 		right = " ▼"
 	}
-	frac := rowDesc.Render(itoa(p.cursor+1) + "/" + itoa(len(p.items)))
+	frac := rowDesc.Render(itoa(p.cursor+1) + "/" + itoa(len(p.visible)))
 	sel := ""
 	if p.multi {
 		sel = "   " + checkOn.Render("◉ "+itoa(p.selectedCount())+" marked")
+	}
+	if p.filter != "" {
+		sel += "   " + rowDesc.Render("/"+p.filter)
 	}
 	return pos(left) + frac + pos(right) + sel
 }

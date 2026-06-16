@@ -24,6 +24,9 @@ swoop-core <subcommand> [args] # non-interactive, driven by the TUI or CLI
 | `use` | `use <source>...` | Install skills from a source. With `-- --skill X --skill Y -y` after `--`, installs specific skills. Without `--`, shows an interactive picker. |
 | `update` | `update [--all] [skill...]` | Refresh installed skills from GitHub. `--all` walks every known project dir. |
 | `browse` | `browse [query]` | Search skills.sh. Shows results, lets you remember/install repos. |
+| `stars` | (no args) | Print starred skills as `source<TAB>skill<TAB>description`. |
+| `star` | `star <source> <skill>...` | Validate and remember source/skill pairs for quick reuse. |
+| `unstar` | `unstar <source> <skill>...` | Remove starred source/skill pairs. |
 | `list` | (no args) | Print saved sources, agents, and scope. |
 | `remove` | `remove [source]...` | Remove saved sources. Interactive picker if no args. |
 | `agents` | `agents [name]...` | Print or set default target agents. Default: `claude-code codex`. |
@@ -51,6 +54,7 @@ Aliases: `save`=`add`, `install`=`use`, `upgrade`=`update`, `rm`=`remove`, `ls`=
   agents           One agent name per line (default: claude-code + codex)
   projects         One absolute path per line — dirs skills were installed into
   aliases          url<TAB>alias per line — display names (TUI only)
+  stars            source<TAB>skill<TAB>description — starred skills for reuse
 
 ~/.local/share/swoop/
   library/         Skills copied here by `add` (local) or `stash` (global tidy)
@@ -187,6 +191,7 @@ The TUI uses the machine-readable commands for data, then drives user-facing com
 |------------|-------------|
 | Sources list | `_sources` |
 | Skills picker | `_skills <source>` |
+| Starred picker | `~/.config/swoop/stars`, then grouped `use <source> -- --skill ...` installs |
 | Search | `_search <query>` |
 | Install | `use <source> -- --skill X -y` |
 | Update | `update` / `update --all` |

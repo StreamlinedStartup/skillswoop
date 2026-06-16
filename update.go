@@ -20,6 +20,9 @@ func (m *model) layout() {
 	}
 	// body layout for list screens = heading(1) + blank(1) + list + footer(1)
 	listH := m.innerH - 3
+	if m.screen == scSkills && m.filtering {
+		listH--
+	}
 	if listH < 1 {
 		listH = 1
 	}
@@ -85,8 +88,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setResult(body)
 			return m, nil
 		}
-		m.enterPicker(newPicker(msg.items, true))
+		m.enterPicker(newPicker(applyStars(msg.items, m.curSource), true))
 		m.screen = scSkills
+		return m, nil
+
+	case starredMsg:
+		if len(msg.items) == 0 {
+			m.screen = scMenu
+			return m, flashFor("no starred skills yet — open a source and press s on a skill", 0)
+		}
+		m.enterPicker(newPicker(msg.items, true))
+		m.screen = scStarred
 		return m, nil
 
 	case searchMsg:
@@ -149,7 +161,7 @@ func (m *model) activeList() *picker {
 	switch m.screen {
 	case scMenu:
 		return m.menu
-	case scSources, scSkills, scBrowseResults, scRemove:
+	case scSources, scSkills, scStarred, scBrowseResults, scRemove:
 		return m.pick
 	}
 	return nil
@@ -257,12 +269,47 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case scSkills:
+		if m.filtering {
+			return m.onFilterKey(msg)
+		}
 		switch k {
 		case "esc":
 			m.busyTitle = "loading saved sources"
 			m.screen = scRunning
 			return m, loadSourcesCmd()
 		case "q":
+			m.screen = scMenu
+		case "/":
+			m.filtering = true
+			m.input.Placeholder = "filter skills"
+			m.input.SetValue(m.pick.filter)
+			m.input.Focus()
+			m.layout()
+		case "up", "k":
+			m.pick.move(-1)
+		case "down", "j":
+			m.pick.move(1)
+		case "home":
+			m.pick.home()
+		case "end":
+			m.pick.end()
+		case " ":
+			m.pick.toggle()
+		case "s":
+			return m, m.toggleCurrentStar()
+		case "a":
+			all := m.pick.visibleSelectedCount() < m.pick.len()
+			m.pick.selectAll(all)
+		case "tab":
+			m.global = !m.global
+		case "enter":
+			return m, m.installSelected()
+		}
+		return m, nil
+
+	case scStarred:
+		switch k {
+		case "esc", "q":
 			m.screen = scMenu
 		case "up", "k":
 			m.pick.move(-1)
@@ -275,7 +322,7 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case " ":
 			m.pick.toggle()
 		case "a":
-			all := m.pick.selectedCount() < m.pick.len()
+			all := m.pick.visibleSelectedCount() < m.pick.len()
 			m.pick.selectAll(all)
 		case "tab":
 			m.global = !m.global
@@ -298,7 +345,7 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case " ":
 			m.pick.toggle()
 		case "a":
-			all := m.pick.selectedCount() < m.pick.len()
+			all := m.pick.visibleSelectedCount() < m.pick.len()
 			m.pick.selectAll(all)
 		case "enter":
 			sel := m.pick.selected()
@@ -336,7 +383,7 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.busyTitle = "removing sources"
 			m.screen = scRunning
-			return m, opCmd("removed sources", args...)
+			return m, removeSourcesCmd(args...)
 		}
 		return m, nil
 
@@ -419,4 +466,59 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func removeSourcesCmd(args ...string) tea.Cmd {
+	return func() tea.Msg {
+		out, err := core(args...)
+		body := stripANSI(out)
+		if err == nil {
+			if pruneErr := pruneStarsForSources(args[1:]); pruneErr != nil {
+				err = pruneErr
+				if body != "" {
+					body += "\n"
+				}
+				body += "failed to prune starred skills: " + pruneErr.Error()
+			}
+		}
+		return opDoneMsg{title: "removed sources", output: body, err: err}
+	}
+}
+
+func (m *model) onFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.filtering = false
+		m.input.Blur()
+		m.layout()
+		return m, nil
+	case "esc":
+		m.filtering = false
+		m.input.SetValue("")
+		m.input.Blur()
+		m.pick.setFilter("")
+		m.layout()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	m.pick.setFilter(m.input.Value())
+	return m, cmd
+}
+
+func (m *model) toggleCurrentStar() tea.Cmd {
+	it, ok := m.pick.current()
+	if !ok {
+		return nil
+	}
+	on, err := toggleStar(it)
+	if err != nil {
+		return flashFor("could not update starred skills: "+err.Error(), 0)
+	}
+	it.star = on
+	m.pick.replaceCurrent(it)
+	if on {
+		return flashFor("starred "+it.title, 0)
+	}
+	return flashFor("unstarred "+it.title, 0)
 }
