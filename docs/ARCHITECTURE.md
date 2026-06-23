@@ -1,6 +1,6 @@
 # Architecture: The Go TUI
 
-skillswoop is a single Go binary that presents a Bubble Tea TUI on the front and delegates all real work to an embedded Bash engine. This doc covers the Go side — the TUI architecture, screen flow, and how each file fits together.
+skillswoop is a single Go binary that presents a Bubble Tea TUI on the front and delegates all real work to an embedded Bash engine. For details on the engine itself, see [ENGINE.md](./ENGINE.md). This doc covers the Go side — the TUI architecture, screen flow, and how each file fits together.
 
 ## System diagram
 
@@ -87,7 +87,8 @@ stateDiagram-v2
     scMenu --> scAdd: "Add a source"
     scMenu --> scRemove: "Remove"
     scMenu --> scAgents: "Default agents"
-    scMenu --> scRunning: "Update here / Update all"
+    scMenu --> scRunning: "Update here"
+    scMenu --> scRunning: "Update all"
     scMenu --> [*]: "Quit"
 
     scSources --> scRunning: enter source

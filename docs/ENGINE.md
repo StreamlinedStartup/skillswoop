@@ -2,6 +2,10 @@
 
 `swoop-core` is a ~580-line Bash script that does all the real work in skillswoop: cloning repos, listing skills, running `npx skills`, and managing config. The Go binary is just a TUI shell that delegates to this script.
 
+### What is a "skill"?
+
+A skill is a directory containing a `SKILL.md` file with YAML frontmatter (`name`, `description`) and Markdown instructions. Claude Code and Codex load these from their skill directories (e.g., `.claude/skills/<name>/`). The `npx skills` CLI (from [vercel-labs/skills](https://github.com/vercel-labs/skills)) handles fetching and placing them into the right agent directories.
+
 ## How it runs
 
 The script lives at `engine/swoop-core` in the repo. It's embedded into the Go binary via `go:embed`. On first run, `embed.go` extracts it to the user's cache (`~/Library/Caches/swoop/swoop-core-<sha256-prefix>`) and exec's it from there. The hash ensures a new binary release replaces the old engine.
@@ -21,7 +25,7 @@ swoop-core <subcommand> [args] # non-interactive, driven by the TUI or CLI
 |---------|-----------|--------------|
 | `menu` | (no args) | Interactive home screen. Loops until "Quit". |
 | `add` | `add <source>...` | Remember one or more sources. Local paths get copied into the library. |
-| `use` | `use <source>...` | Install skills from a source. With `-- --skill X --skill Y -y` after `--`, installs specific skills. Without `--`, shows an interactive picker. |
+| `use` | `use <source>... [-- args]` | Install skills from a source. Without `--`, shows an interactive picker. With `-- --skill X --skill Y -y`, installs specific skills non-interactively. |
 | `update` | `update [--all] [skill...]` | Refresh installed skills from GitHub. `--all` walks every known project dir. |
 | `browse` | `browse [query]` | Search skills.sh. Shows results, lets you remember/install repos. |
 | `stars` | (no args) | Print starred skills as `source<TAB>skill<TAB>description`. |
@@ -33,6 +37,8 @@ swoop-core <subcommand> [args] # non-interactive, driven by the TUI or CLI
 | `stash` | (no args) | Move global skills out of `~/.claude/skills` etc. into the library. One-time declutter. |
 | `_skills` | `_skills <source>` | Machine-readable: print `name<TAB>desc` for each skill in a source. Used by the TUI. |
 | `_search` | `_search [query]` | Machine-readable: search skills.sh, print `source<TAB>name<TAB>installs`. Used by the TUI. |
+| `_sources` | `_sources` | Machine-readable: print saved sources. (Engine has it; TUI reads the file directly instead.) |
+| `_projects` | `_projects` | Machine-readable: print known project dirs. (Engine has it; TUI reads the file directly instead.) |
 
 Flags that apply anywhere:
 
@@ -189,7 +195,7 @@ The TUI uses the machine-readable commands for data, then drives user-facing com
 
 | TUI screen | Engine call |
 |------------|-------------|
-| Sources list | `_sources` |
+| Sources list | (reads `~/.config/swoop/sources` directly via `loadSources()`) |
 | Skills picker | `_skills <source>` |
 | Starred picker | `~/.config/swoop/stars`, then grouped `use <source> -- --skill ...` installs |
 | Search | `_search <query>` |
