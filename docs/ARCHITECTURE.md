@@ -19,6 +19,8 @@ graph LR
         VW --> TH[theme.go]
         BT --> BE[backend.go]
         BE --> EM[embed.go]
+        MOD --> ST[stars.go]
+        PK --> FZ[fuzzy.go]
     end
 
     PT -->|exec| ENG[swoop-core]
@@ -125,7 +127,7 @@ stateDiagram-v2
 
 Entry point. Parses `--version`, routes to TUI or CLI passthrough. Version is stamped at build time via `-ldflags "-X main.version=..."`.
 
-### `model.go` (149 lines)
+### `model.go` (156 lines)
 
 The `model` struct holds all TUI state:
 
@@ -147,7 +149,7 @@ type model struct {
 
 Also defines all message types (`sourcesMsg`, `skillsMsg`, `opDoneMsg`, etc.) and command constructors (`loadSourcesCmd`, `opCmd`, etc.).
 
-### `update.go` (422 lines — largest file)
+### `update.go` (548 lines — largest file)
 
 The `Update()` method is the central message router. It handles:
 
@@ -163,7 +165,7 @@ The `Update()` method is the central message router. It handles:
 
 Layout math lives in `layout()` — calculates `innerW`/`innerH` accounting for header, borders, status bar.
 
-### `view.go` (157 lines)
+### `view.go` (173 lines)
 
 `View()` builds the full terminal output: header (gradient banner) → panel (body) → status bar.
 
@@ -175,11 +177,11 @@ Layout math lives in `layout()` — calculates `innerW`/`innerH` accounting for 
 
 `statusBar()` renders a two-column footer: key hints + scope + agents.
 
-### `menu.go` (134 lines)
+### `menu.go` (185 lines)
 
-Defines the 9 main menu entries as `menuEntry` structs, each with an `act` function that returns a `(tea.Model, tea.Cmd)`. Also contains `installSelected()` which builds the engine command from marked skills.
+Defines the 10 main menu entries as `menuEntry` structs, each with an `act` function that returns a `(tea.Model, tea.Cmd)`. Also contains `installSelected()` which builds the engine command from marked skills.
 
-### `picker.go`
+### `picker.go` (305 lines)
 
 A self-contained, windowed, optionally multi-select list widget. Handles:
 
@@ -191,7 +193,7 @@ A self-contained, windowed, optionally multi-select list widget. Handles:
 
 The picker is reused for every list: menu, sources, skills, browse results, remove.
 
-### `backend.go` (195 lines)
+### `backend.go` (255 lines)
 
 The bridge to the engine:
 
@@ -208,7 +210,15 @@ The bridge to the engine:
 
 Also contains `stripANSI()` (regex to remove ANSI escape codes) and config path helpers.
 
-### `theme.go` (155 lines)
+### `stars.go` (118 lines)
+
+Manages starred source/skill pairs — skills the user has marked for quick reuse. Stores them in `~/.config/swoop/stars` as `source<TAB>skill<TAB>description` lines. Used by the Starred Skills menu entry, which groups starred skills by source and installs them in batched engine calls.
+
+### `fuzzy.go` (88 lines)
+
+Slash-filter mode for the skills picker. When the user types `/query`, the picker switches from normal scrolling to fuzzy-filtered view. Keeps all rows as backing state and filters visible indexes, so marks and selections survive filtering.
+
+### `theme.go` (156 lines)
 
 Cyberpunk visual style. Defines:
 
@@ -251,4 +261,13 @@ No build tags, no CGO, no special flags beyond the optional version stamp. The `
 
 ## Testing
 
-`render_test.go` is the only test. It constructs a model, simulates a `WindowSizeMsg`, then walks through several screens (menu, skills picker, running, result, add input) calling `View()` on each to verify nothing panics. No assertions — it's a smoke test that prints rendered output to stdout.
+Six test files cover the main code paths:
+
+| File | What it tests |
+|------|---------------|
+| `render_test.go` | Smoke test: walks screens (menu, skills, running, result, add) calling `View()` to verify nothing panics |
+| `update_test.go` | Tests for the `Update()` message router |
+| `backend_test.go` | Tests for engine bridge functions |
+| `engine_test.go` | Tests for engine integration |
+| `fuzzy_test.go` | Tests for the slash-filter mode |
+| `stars_test.go` | Tests for starred skills read/write |
