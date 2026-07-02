@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // TestRender drives the model without a TTY to prove screens render w/o panic.
@@ -64,4 +65,66 @@ func TestRender(t *testing.T) {
 	model.input.Placeholder = "owner/repo | https://… | ~/path/to/skill"
 	model.input.SetValue("vercel-labs/agent-skills")
 	dump("ADD INPUT")
+}
+
+// TestRenderPluginScreens proves the plugin screens render without panic,
+// including badge rows at a narrow width.
+func TestRenderPluginScreens(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	model := mm.(*model)
+
+	dump := func(label string) {
+		fmt.Println("\n================= " + label + " =================")
+		fmt.Println(mm.View())
+	}
+
+	model.enterPicker(newPicker([]item{
+		{id: "anthropics/claude-plugins-official", title: "anthropics/claude-plugins-official", desc: "claude + codex"},
+		{id: "owner/mkt", title: "owner/mkt", desc: "claude only"},
+	}, false))
+	model.screen = scMarkets
+	dump("MARKETS")
+
+	plugins := []item{
+		{id: "hooky", title: "hooky", desc: "A plugin with hooks and mcp.", flags: "claude,codex,hooks,mcp"},
+		{id: "plain", title: "plain", desc: "Nothing fancy. · claude only", flags: "claude"},
+	}
+	model.curMarket = "anthropics/claude-plugins-official"
+	model.enterPicker(newPicker(plugins, true))
+	model.pick.items[0].sel = true
+	model.screen = scPlugins
+	dump("PLUGINS (badges)")
+
+	// narrow terminal: badges must not overflow the row budget
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 40, Height: 14})
+	dump("PLUGINS (narrow)")
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+
+	model.enterPicker(newPicker([]item{
+		{id: "hooky@test-mkt", title: "hooky@test-mkt", desc: "claude,codex  ·  A plugin."},
+	}, true))
+	model.screen = scPluginRemove
+	dump("REMOVE PLUGINS")
+
+	model.addMarketplace = true
+	model.screen = scAdd
+	model.input.Placeholder = "owner/repo | https://… | ~/path/to/marketplace"
+	model.input.SetValue("anthropics/claude-plugins-official")
+	dump("ADD MARKETPLACE INPUT")
+}
+
+func TestBadgeRowFitsWidth(t *testing.T) {
+	p := newPicker([]item{
+		{id: "hooky", title: "a-rather-long-plugin-name", desc: "some description here", flags: "claude,codex,hooks,mcp"},
+	}, true)
+	for _, w := range []int{20, 28, 40, 80} {
+		p.setSize(w, 5)
+		row := p.renderRow(0)
+		if got := lipgloss.Width(row); got > w {
+			t.Fatalf("row width %d exceeds picker width %d: %q", got, w, row)
+		}
+	}
 }

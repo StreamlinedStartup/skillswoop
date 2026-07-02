@@ -1,6 +1,6 @@
 # The Bash Engine (`swoop-core`)
 
-`swoop-core` is a ~580-line Bash script that does all the real work in skillswoop: cloning repos, listing skills, running `npx skills`, and managing config. The Go binary is just a TUI shell that delegates to this script.
+`swoop-core` is a ~1000-line Bash script that does all the real work in skillswoop: cloning repos, listing skills, running `npx skills`, and managing config. The Go binary is just a TUI shell that delegates to this script.
 
 ### What is a "skill"?
 
@@ -35,10 +35,16 @@ swoop-core <subcommand> [args] # non-interactive, driven by the TUI or CLI
 | `remove` | `remove [source]...` | Remove saved sources. Interactive picker if no args. |
 | `agents` | `agents [name]...` | Print or set default target agents. Default: `claude-code codex`. |
 | `stash` | (no args) | Move global skills out of `~/.claude/skills` etc. into the library. One-time declutter. |
+| `mkt` | `mkt add <source>... \| list \| remove <source>... \| update` | Manage plugin marketplaces. `add` detects which manifest format(s) a repo provides, registers it with each compatible agent's native CLI (`claude plugin marketplace add` / `codex plugin marketplace add`), warns about skipped agents, and caches the marketplace names. `update` runs `claude plugin marketplace update` + `codex plugin marketplace upgrade`. |
+| `plugin` | `plugin install <source> <plugin>... \| list \| remove <plugin[@marketplace]>...` | Install/list/remove plugins via the native CLIs. Unknown source on install offers `mkt add` first. |
 | `_skills` | `_skills <source>` | Machine-readable: print `name<TAB>desc` for each skill in a source. Used by the TUI. |
 | `_search` | `_search [query]` | Machine-readable: search skills.sh, print `source<TAB>name<TAB>installs`. Used by the TUI. |
 | `_sources` | `_sources` | Machine-readable: print saved sources. (Engine has it; TUI reads the file directly instead.) |
 | `_projects` | `_projects` | Machine-readable: print known project dirs. (Engine has it; TUI reads the file directly instead.) |
+| `_mkts` | `_mkts` | Machine-readable: dump the marketplaces file. (Engine has it; TUI reads the file directly instead.) |
+| `_plugins` | `_plugins <source>` | Machine-readable: print an `@marketplace<TAB>claude_name<TAB>codex_name` header, then `name<TAB>desc<TAB>flags` per plugin (flags: `claude,codex,hooks,mcp,commands,agents,skills`). Used by the TUI. |
+| `_plugins_installed` | `_plugins_installed` | Machine-readable: merge `claude plugin list --json` + `codex plugin list --json` into `name@marketplace<TAB>agents<TAB>desc`. Tolerates either CLI missing (warns on stderr). |
+| `_codex_hooks` | `_codex_hooks` | Machine-readable: print the codex `features.hooks` state — `on`, `off`, or `n/a`. Any parse failure is `n/a`; it never blocks installs. |
 
 Flags that apply anywhere:
 
@@ -48,9 +54,10 @@ Flags that apply anywhere:
 | `--link` | Symlink skills instead of copying |
 | `--no-copy` | Don't copy local skills into the library on `add` |
 | `--dry-run` | Print what would run instead of running it |
+| `--no-hooks-enable` | On `plugin install`, never toggle codex `features.hooks` (skip the enable prompt) |
 | `--` | Everything after `--` is passed to `npx skills` |
 
-Aliases: `save`=`add`, `install`=`use`, `upgrade`=`update`, `rm`=`remove`, `ls`=`list`, `migrate`=`stash`.
+Aliases: `save`=`add`, `install`=`use`, `upgrade`=`update`, `rm`=`remove`, `ls`=`list`, `migrate`=`stash`, `marketplace`=`mkt`, `plugins`=`plugin`.
 
 ## File layout
 
@@ -61,6 +68,9 @@ Aliases: `save`=`add`, `install`=`use`, `upgrade`=`update`, `rm`=`remove`, `ls`=
   projects         One absolute path per line — dirs skills were installed into
   aliases          url<TAB>alias per line — display names (TUI only)
   stars            source<TAB>skill<TAB>description — starred skills for reuse
+  marketplaces     source<TAB>claude_name<TAB>codex_name — plugin marketplaces
+                   (names cached from each format's marketplace.json at add time;
+                   empty column = that format is absent from the repo)
 
 ~/.local/share/swoop/
   library/         Skills copied here by `add` (local) or `stash` (global tidy)
@@ -180,6 +190,23 @@ The engine doesn't install skills itself — it builds the right `npx skills add
 - **Single dir** (`update`): Runs `npx skills update -p -y` in the current directory (or `-g` for global). Requires a `skills-lock.json` to exist.
 - **All dirs** (`update --all`): Reads `~/.config/swoop/projects`, iterates each dir, runs `npx skills update -p -y` inside it. Prunes entries where the dir is gone or has no `skills-lock.json`.
 
+## How plugins work
+
+Plugins are bundles (skills + hooks + MCP servers + Claude-only commands/agents) distributed through marketplace repos. Unlike skills, the engine never places files itself — it drives each agent's native plugin CLI, which also auto-wires any bundled hooks on install.
+
+A marketplace repo can carry two manifest formats:
+
+- `.claude-plugin/marketplace.json` — Claude Code
+- `.agents/plugins/marketplace.json` — Codex
+
+`mkt add` reads both (via the inline `NODE_PLUGINS` parser on a shallow clone or local path), registers the repo with each agent whose format exists, and warns clearly about the ones it skipped. The `name` field from each manifest is cached in the `marketplaces` file so later installs/removals know what name each CLI registered.
+
+**Scope mapping** on `plugin install`: swoop's project scope (default) becomes `claude plugin install <p>@<mkt> --scope project`; `-g` becomes `--scope user`. Codex has no project scope — `codex plugin add <p>@<mkt>` is always user-wide, and the engine prints a note when installing in project mode.
+
+**Codex hooks**: before installing a hook-flagged plugin for codex, if `_codex_hooks` reports `off` the engine asks to run `codex features enable hooks` (auto-yes under `SWOOP_ASSUME_YES`; suppressed entirely by `--no-hooks-enable`). Declining continues the install with a warning that the plugin's hooks won't run.
+
+**Hooks/mcp detection caveat**: component flags are exact for plugins whose `source` is a relative path inside the marketplace repo (the engine inspects the directory for `hooks/hooks.json`, `.mcp.json`, `commands/`, `agents/`, `skills/` and the plugin.json keys). For plugins hosted in *external* repos, only what the marketplace entry itself declares is badged — no second clone is made.
+
 ## TUI integration
 
 The Go binary calls the engine through `core()` in `backend.go`:
@@ -206,6 +233,12 @@ The TUI uses the machine-readable commands for data, then drives user-facing com
 | Browse results | `browse <query>` → remembers + installs |
 | Tidy global | `stash` |
 | Set agents | `agents <names>...` |
+| Marketplace list | (reads `~/.config/swoop/marketplaces` directly via `loadMarketplaces()`) |
+| Plugins picker | `_plugins <source>` |
+| Install plugins | `_codex_hooks` (when a marked plugin has hooks), then `plugin install <mkt> <p>... [--no-hooks-enable]` |
+| Add marketplace | `mkt add <source>` |
+| Remove marketplace / update | `mkt remove <source>` / `mkt update` |
+| Remove plugins | `_plugins_installed`, then `plugin remove <p@mkt>...` |
 
 CLI passthrough (`swoop use ...`) goes straight to the engine with no `NO_COLOR` or `SWOOP_ASSUME_YES` — it talks directly to the terminal.
 

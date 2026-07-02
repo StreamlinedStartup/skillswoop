@@ -33,3 +33,78 @@ func TestDownArrowLeavesFilterAndMovesList(t *testing.T) {
 		t.Fatalf("cursor = %d, want 1", m.pick.cursor)
 	}
 }
+
+func TestCodexHooksMsgOffRoutesToConfirm(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	m = mm.(*model)
+	m.screen = scRunning
+	m.pendingInstall = []string{"plugin", "install", "owner/mkt", "hooky"}
+
+	mm, _ = m.Update(codexHooksMsg{state: "off"})
+	m = mm.(*model)
+
+	if m.screen != scConfirm {
+		t.Fatalf("screen = %d, want scConfirm", m.screen)
+	}
+	if m.denyCmd == nil {
+		t.Fatal("expected a deny action for the hooks confirm")
+	}
+	if len(m.pendingInstall) != 0 {
+		t.Fatalf("pendingInstall not cleared: %#v", m.pendingInstall)
+	}
+}
+
+func TestCodexHooksMsgOnInstallsDirectly(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	m = mm.(*model)
+	m.screen = scRunning
+	m.pendingInstall = []string{"plugin", "install", "owner/mkt", "hooky"}
+
+	mm, cmd := m.Update(codexHooksMsg{state: "on"})
+	m = mm.(*model)
+
+	if m.screen != scRunning {
+		t.Fatalf("screen = %d, want scRunning", m.screen)
+	}
+	if cmd == nil {
+		t.Fatal("expected an install command")
+	}
+	if m.denyCmd != nil {
+		t.Fatal("denyCmd should stay nil on the direct path")
+	}
+}
+
+func TestHooksDenyArgsAppendsFlag(t *testing.T) {
+	args := []string{"plugin", "install", "owner/mkt", "hooky"}
+	got := hooksDenyArgs(args)
+	if got[len(got)-1] != "--no-hooks-enable" {
+		t.Fatalf("deny args = %v", got)
+	}
+	if len(args) != 4 {
+		t.Fatalf("original args mutated: %v", args)
+	}
+}
+
+func TestConfirmNoWithoutDenyGoesBack(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	m = mm.(*model)
+	m.prev = scMenu
+	m.screen = scConfirm
+	m.confirmMsg = "sure?"
+
+	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = mm.(*model)
+
+	if m.screen != scMenu {
+		t.Fatalf("screen = %d, want scMenu", m.screen)
+	}
+}

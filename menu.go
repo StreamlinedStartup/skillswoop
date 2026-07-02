@@ -15,6 +15,9 @@ func menuEntries() []menuEntry {
 		{"⌖", "Browse skills.sh", "search the directory and remember new sources", actBrowse},
 		{"＋", "Add a source", "owner/repo · git URL · local path", actAdd},
 		{"✕", "Remove a source", "forget a saved source", actRemove},
+		{"⬢", "Install plugins", "pick a marketplace, then install plugins (hooks auto-wire)", actInstallPlugins},
+		{"⊕", "Add a marketplace", "plugin marketplace repo · owner/repo or URL", actAddMarketplace},
+		{"⊖", "Remove plugins", "uninstall plugins from claude + codex", actRemovePlugins},
 		{"⚙", "Default agents", "choose which agents to target", actAgents},
 		{"⤓", "Tidy global skills", "move ~/.claude & ~/.codex skills into the library", actTidy},
 		{"⏻", "Quit", "exit swoop", actQuit},
@@ -71,10 +74,35 @@ func actBrowse(m *model) (tea.Model, tea.Cmd) {
 func actAdd(m *model) (tea.Model, tea.Cmd) {
 	m.prev = scMenu
 	m.screen = scAdd
+	m.addMarketplace = false
 	m.input.Placeholder = "owner/repo | https://… | ~/path/to/skill"
 	m.input.SetValue("")
 	m.input.Focus()
 	return m, nil
+}
+
+func actInstallPlugins(m *model) (tea.Model, tea.Cmd) {
+	m.prev = scMenu
+	m.busyTitle = "loading marketplaces"
+	m.screen = scRunning // hold here until marketsMsg builds the picker
+	return m, loadMarketsCmd()
+}
+
+func actAddMarketplace(m *model) (tea.Model, tea.Cmd) {
+	m.prev = scMenu
+	m.screen = scAdd
+	m.addMarketplace = true
+	m.input.Placeholder = "owner/repo | https://… | ~/path/to/marketplace"
+	m.input.SetValue("")
+	m.input.Focus()
+	return m, nil
+}
+
+func actRemovePlugins(m *model) (tea.Model, tea.Cmd) {
+	m.prev = scMenu
+	m.busyTitle = "reading installed plugins"
+	m.screen = scRunning
+	return m, loadInstalledPluginsCmd()
 }
 
 func actRemove(m *model) (tea.Model, tea.Cmd) {
@@ -136,6 +164,38 @@ func (m *model) installSelected() tea.Cmd {
 	m.busyTitle = "installing " + itoa(len(sel)) + " skill(s) from " + short(m.curSource)
 	m.screen = scRunning
 	return opCmd("install", args...)
+}
+
+// installSelectedPlugins builds the plugin-install engine call from the marked
+// plugins. When a marked plugin bundles hooks and codex is a target, the args
+// are parked in pendingInstall and the codex features.hooks state is checked
+// first so the user can confirm enabling it (codexHooksMsg finishes the job).
+func (m *model) installSelectedPlugins() tea.Cmd {
+	sel := m.pick.selected()
+	if len(sel) == 0 {
+		return flashFor("nothing marked — press SPACE to mark, then ENTER", 0)
+	}
+	args := []string{}
+	if m.global {
+		args = append(args, "-g")
+	}
+	args = append(args, "plugin", "install", m.curMarket)
+	needHooks := false
+	for _, it := range sel {
+		args = append(args, it.id)
+		if hasFlag(it.flags, "hooks") {
+			needHooks = true
+		}
+	}
+	if needHooks && strings.Contains(m.agents, "codex") {
+		m.pendingInstall = args
+		m.busyTitle = "checking codex hooks"
+		m.screen = scRunning
+		return codexHooksCmd()
+	}
+	m.busyTitle = "installing " + itoa(len(sel)) + " plugin(s)"
+	m.screen = scRunning
+	return opCmd("install plugins", args...)
 }
 
 func installGroupedCmd(title string, global bool, items []item) tea.Cmd {

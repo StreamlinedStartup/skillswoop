@@ -45,6 +45,7 @@ var (
 	checkOn     = lipgloss.NewStyle().Foreground(cGreen).Bold(true)
 	checkOff    = lipgloss.NewStyle().Foreground(cFaint)
 	starStyle   = lipgloss.NewStyle().Foreground(cYellow).Bold(true)
+	badgeStyle  = lipgloss.NewStyle().Foreground(cDim)
 	titleStyle  = lipgloss.NewStyle().Foreground(cPink).Bold(true)
 	okStyle     = lipgloss.NewStyle().Foreground(cGreen).Bold(true)
 	errStyle    = lipgloss.NewStyle().Foreground(cRed).Bold(true)

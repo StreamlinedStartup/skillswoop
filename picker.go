@@ -11,6 +11,7 @@ type item struct {
 	title  string
 	desc   string
 	source string
+	flags  string // comma list for plugins, e.g. "claude,codex,hooks,mcp"
 	sel    bool
 	star   bool
 }
@@ -212,13 +213,23 @@ func (p *picker) renderRow(i int) string {
 		star = starStyle.Render("★ ")
 	}
 
+	// component badges for plugin rows, rendered between the title and the desc
+	badge := ""
+	badgeW := 0
+	for _, f := range []string{"hooks", "mcp"} {
+		if hasFlag(it.flags, f) {
+			badge += " " + badgeStyle.Render("["+f+"]")
+			badgeW += len(f) + 3 // space + brackets
+		}
+	}
+
 	titleStyle := rowNormal
 	descStyle := rowDesc
 	if cur {
 		titleStyle, descStyle = rowCursor, rowDescCur
 	}
 
-	// width budget: width - bar(2) - box(2 if multi) - star marker
+	// width budget: width - bar(2) - box(2 if multi) - star marker - badges
 	avail := p.width - 2
 	if p.multi {
 		avail -= 2
@@ -226,13 +237,19 @@ func (p *picker) renderRow(i int) string {
 	if it.star {
 		avail -= 2
 	}
+	avail -= badgeW
+	if avail < 6 {
+		// too narrow for badges — drop them rather than overflow the row
+		avail += badgeW
+		badge, badgeW = "", 0
+	}
 	if avail < 6 {
 		avail = 6
 	}
 
 	// single-column rows (no description): just the title
 	if it.desc == "" {
-		return bar + box + star + titleStyle.Render(truncate(it.title, avail))
+		return bar + box + star + titleStyle.Render(truncate(it.title, avail)) + badge
 	}
 
 	// two-column rows: pad every title to a shared column so descriptions align.
@@ -254,7 +271,7 @@ func (p *picker) renderRow(i int) string {
 	if descW > 1 {
 		desc = strings.Repeat(" ", gap) + descStyle.Render(truncate(it.desc, descW))
 	}
-	return bar + box + star + titleStyle.Render(t) + strings.Repeat(" ", pad) + desc
+	return bar + box + star + titleStyle.Render(t) + strings.Repeat(" ", pad) + badge + desc
 }
 
 // scrollFooter is a 1-line indicator the view can append (e.g. "  3/29 ▾").
