@@ -138,25 +138,45 @@ remove_star() {
   awk -F '\t' -v src="$src" -v skill="$skill" '!(($1==src)&&($2==skill))' "$STARS" > "$tmp" 2>/dev/null || :
   mv "$tmp" "$STARS"
 }
+# canonical registry key for a marketplace source, so owner/repo and the
+# matching github URL don't create duplicate entries
+mkt_key() {
+  local s="$1" k
+  if is_local "$s"; then resolve_local "$s" 2>/dev/null || printf '%s\n' "$s"; return 0; fi
+  k="$(gh_slug "$s" 2>/dev/null)" || k="$s"
+  printf '%s\n' "$k"
+}
 save_marketplace() {  # $1 source  $2 claude_name  $3 codex_name
-  local src="$1" cn="${2:-}" xn="${3:-}" tmp
+  local src cn="${2:-}" xn="${3:-}" tmp line
+  src="$(mkt_key "$1")"
   mkdir -p "$CONFIG_DIR"; touch "$MARKETPLACES"; tmp="$(mktmp)"
-  awk -F '\t' -v src="$src" '$1!=src' "$MARKETPLACES" > "$tmp" 2>/dev/null || :
+  while IFS= read -r line; do   # compare canonically so legacy spellings collapse
+    [ -n "$line" ] || continue
+    [ "$(mkt_key "${line%%$'\t'*}")" = "$src" ] || printf '%s\n' "$line" >> "$tmp"
+  done < "$MARKETPLACES"
   printf '%s\t%s\t%s\n' "$src" "$cn" "$xn" >> "$tmp"
   mv "$tmp" "$MARKETPLACES"
 }
 remove_marketplace() {
-  local src="$1" tmp
+  local src tmp line
   [ -f "$MARKETPLACES" ] || return 0
-  tmp="$(mktmp)"
-  awk -F '\t' -v src="$src" '$1!=src' "$MARKETPLACES" > "$tmp" 2>/dev/null || :
+  src="$(mkt_key "$1")"; tmp="$(mktmp)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$(mkt_key "${line%%$'\t'*}")" = "$src" ] || printf '%s\n' "$line" >> "$tmp"
+  done < "$MARKETPLACES"
   mv "$tmp" "$MARKETPLACES"
 }
 marketplace_line() {  # $1 source; prints the cached "src<TAB>claude<TAB>codex" line
   [ -f "$MARKETPLACES" ] || return 1
-  local line; line="$(awk -F '\t' -v src="$1" '$1==src{print; exit}' "$MARKETPLACES")"
-  [ -n "$line" ] || return 1
-  printf '%s\n' "$line"
+  local want line
+  want="$(mkt_key "$1")"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$(mkt_key "${line%%$'\t'*}")" = "$want" ] || continue
+    printf '%s\n' "$line"; return 0
+  done < "$MARKETPLACES"
+  return 1
 }
 prune_stars_for_sources() {
   [ -f "$STARS" ] || return 0

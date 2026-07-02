@@ -91,6 +91,33 @@ func TestHooksDenyArgsAppendsFlag(t *testing.T) {
 	}
 }
 
+func TestMarketRenameRoundTrip(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	m = mm.(*model)
+	m.enterPicker(newPicker([]item{
+		{id: "anthropics/claude-plugins-official", title: "anthropics/claude-plugins-official", desc: "claude only"},
+	}, false))
+	m.screen = scMarkets
+
+	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = mm.(*model)
+	if m.screen != scRename || m.prev != scMarkets {
+		t.Fatalf("screen = %d, prev = %d; want scRename from scMarkets", m.screen, m.prev)
+	}
+	m.input.SetValue("Official plugins")
+	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(*model)
+	if m.screen != scMarkets {
+		t.Fatalf("screen = %d, want scMarkets after save", m.screen)
+	}
+	if got := loadAliases()["anthropics/claude-plugins-official"]; got != "Official plugins" {
+		t.Fatalf("alias = %q, want %q", got, "Official plugins")
+	}
+}
+
 func TestConfirmNoWithoutDenyGoesBack(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := newModel()

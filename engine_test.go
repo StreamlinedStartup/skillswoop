@@ -134,6 +134,61 @@ func TestEnginePluginsLocalMarketplace(t *testing.T) {
 	}
 }
 
+func TestEngineMktAddDedupesSourceSpellings(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required by the engine plugin walker")
+	}
+	root := t.TempDir()
+	mkt := filepath.Join(root, "mkt")
+	writeMarketplace(t, mkt)
+	bin := writeStubCLIs(t, root)
+
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("bash", append([]string{"engine/swoop-core"}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"XDG_CONFIG_HOME="+filepath.Join(root, "config"),
+			"XDG_DATA_HOME="+filepath.Join(root, "data"),
+			"NO_COLOR=1",
+			"SWOOP_DRYRUN=1",
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	// two spellings of the same local marketplace must collapse to one entry
+	rel, err := filepath.Rel(mustGetwd(t), mkt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("mkt", "add", "./"+rel); err != nil {
+		t.Fatalf("mkt add (relative) failed: %v\n%s", err, out)
+	}
+	if out, err := run("mkt", "add", mkt); err != nil {
+		t.Fatalf("mkt add (absolute) failed: %v\n%s", err, out)
+	}
+	out, err := run("_mkts")
+	if err != nil {
+		t.Fatalf("_mkts failed: %v\n%s", err, out)
+	}
+	lines := strings.Count(strings.TrimSpace(out), "\n") + 1
+	if strings.TrimSpace(out) == "" || lines != 1 {
+		t.Fatalf("expected exactly one marketplace entry, got:\n%s", out)
+	}
+	if !strings.HasPrefix(out, mkt+"\t") {
+		t.Fatalf("entry not stored under the canonical path:\n%s", out)
+	}
+}
+
+func mustGetwd(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wd
+}
+
 func TestEnginePluginsClaudeOnlyMarketplaceSkipsCodex(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is required by the engine plugin walker")

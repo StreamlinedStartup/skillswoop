@@ -234,12 +234,17 @@ func (m *model) activeList() *picker {
 
 // refreshSources rebuilds the source list in place (after an alias change),
 // keeping the cursor on roughly the same row.
-func (m *model) refreshSources() {
+func (m *model) refreshSources() { m.refreshPicker(sourceItems()) }
+
+// refreshMarkets does the same for the marketplace list.
+func (m *model) refreshMarkets() { m.refreshPicker(marketItems()) }
+
+func (m *model) refreshPicker(items []item) {
 	cur := 0
 	if m.pick != nil {
 		cur = m.pick.cursor
 	}
-	m.enterPicker(newPicker(sourceItems(), false))
+	m.enterPicker(newPicker(items, false))
 	if cur >= m.pick.len() {
 		cur = m.pick.len() - 1
 	}
@@ -321,12 +326,16 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case scRename:
 		switch k {
 		case "esc":
-			m.screen = scSources
+			m.screen = m.prev
 			return m, nil
 		case "enter":
 			_ = saveAlias(m.renameURL, m.input.Value())
-			m.refreshSources()
-			m.screen = scSources
+			if m.prev == scMarkets {
+				m.refreshMarkets()
+			} else {
+				m.refreshSources()
+			}
+			m.screen = m.prev
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -386,6 +395,16 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pick.end()
 		case "tab":
 			m.global = !m.global
+		case "ctrl+r":
+			if it, ok := m.pick.current(); ok {
+				m.renameURL = it.id
+				m.prev = scMarkets
+				m.screen = scRename
+				m.input.Placeholder = "friendly name (blank = show the source)"
+				m.input.SetValue(loadAliases()[it.id])
+				m.input.CursorEnd()
+				m.input.Focus()
+			}
 		case "u":
 			m.busyTitle = "updating marketplaces"
 			m.screen = scRunning
