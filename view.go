@@ -59,7 +59,11 @@ func (m *model) buildBody() string {
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scRename:
-		return heading("RENAME source", short(m.renameURL)) + "\n\n" +
+		label := "RENAME source"
+		if m.prev == scMarkets {
+			label = "RENAME marketplace"
+		}
+		return heading(label, short(m.renameURL)) + "\n\n" +
 			m.input.View() + "\n\n" +
 			rowDesc.Render("ENTER save · ESC cancel · blank = show the repo URL")
 
@@ -86,7 +90,7 @@ func (m *model) buildBody() string {
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scMarkets:
-		return heading("PLUGINS", "pick a marketplace · x removes · u updates") + "\n\n" +
+		return heading("PLUGINS", "pick a marketplace · ctrl+r renames · x removes · u updates") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scPlugins:
@@ -171,7 +175,7 @@ func (m *model) statusBar() string {
 	case scBrowseResults, scRemove, scPluginRemove:
 		keys = key("↑↓", "move") + key("space", "mark") + key("⏎", "go") + key("esc", "back")
 	case scMarkets:
-		keys = key("↑↓", "move") + key("⏎", "open") + key("x", "remove") + key("u", "update") + key("esc", "back")
+		keys = key("↑↓", "move") + key("⏎", "open") + key("ctrl+r", "rename") + key("x", "remove") + key("u", "update") + key("esc", "back")
 	case scPlugins:
 		if m.filtering {
 			keys = key("type", "filter") + key("⏎", "list") + key("esc", "clear")

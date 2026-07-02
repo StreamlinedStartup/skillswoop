@@ -199,7 +199,10 @@ func loadMarketplaces() []marketplace {
 	return out
 }
 
+// marketItems builds the marketplace list, showing an alias when one is set
+// (same aliases file as sources; item.id is always the real source).
 func marketItems() []item {
+	al := loadAliases()
 	mkts := loadMarketplaces()
 	items := make([]item, len(mkts))
 	for i, mk := range mkts {
@@ -212,7 +215,16 @@ func marketItems() []item {
 		case mk.codex != "":
 			desc = "codex only"
 		}
-		items[i] = item{id: mk.source, title: mk.source, desc: desc}
+		it := item{id: mk.source, title: mk.source, desc: desc}
+		if name, ok := al[mk.source]; ok {
+			it.title = name
+			if desc == "" {
+				it.desc = mk.source
+			} else {
+				it.desc = mk.source + "  ·  " + desc
+			}
+		}
+		items[i] = it
 	}
 	return items
 }
