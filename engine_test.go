@@ -84,8 +84,9 @@ func TestEnginePluginsLocalMarketplace(t *testing.T) {
 	if !strings.Contains(out, "@marketplace\ttest-mkt\ttest-mkt-codex") {
 		t.Fatalf("_plugins output missing marketplace header:\n%s", out)
 	}
-	// skills flag comes from the .codex-plugin/plugin.json manifest declaration
-	if !strings.Contains(out, "hooky\tA plugin with hooks and mcp.\tclaude,codex,hooks,mcp,skills\tplugins/hooky") {
+	// flags union both formats' dirs (commands from the claude dir, hooks/mcp/
+	// skills from the codex dir); relpath must be the CODEX manifest's dir
+	if !strings.Contains(out, "hooky\tA plugin with hooks and mcp.\tclaude,codex,hooks,mcp,commands,skills\tplugins/hooky\n") {
 		t.Fatalf("_plugins output missing hooky flags/relpath:\n%s", out)
 	}
 
@@ -301,16 +302,20 @@ func TestEnginePluginsClaudeOnlyMarketplaceSkipsCodex(t *testing.T) {
 }
 
 // writeMarketplace lays out a repo carrying both manifest formats and one
-// plugin with hooks + mcp components.
+// plugin with hooks + mcp components. The two formats point at different
+// plugin dirs (like real dual-format repos) — codex vendoring must use the
+// codex manifest's dir.
 func writeMarketplace(t *testing.T, mkt string) {
 	t.Helper()
 	writeJSONFile(t, filepath.Join(mkt, ".claude-plugin", "marketplace.json"), `{
   "name": "test-mkt",
   "plugins": [
-    { "name": "hooky", "source": "./plugins/hooky", "description": "A plugin with hooks and mcp." },
+    { "name": "hooky", "source": "./plugins/hooky-claude", "description": "A plugin with hooks and mcp." },
     { "name": "plain", "source": "./plugins/plain", "description": "Nothing fancy." }
   ]
 }`)
+	writeJSONFile(t, filepath.Join(mkt, "plugins", "hooky-claude", ".claude-plugin", "plugin.json"),
+		`{"name":"hooky","commands":"./commands/"}`)
 	writeJSONFile(t, filepath.Join(mkt, ".agents", "plugins", "marketplace.json"), `{
   "name": "test-mkt-codex",
   "plugins": [ { "name": "hooky", "source": { "source": "local", "path": "./plugins/hooky" }, "description": "A plugin with hooks and mcp." } ]
