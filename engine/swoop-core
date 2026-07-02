@@ -67,9 +67,12 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
 else BOLD=; DIM=; GRN=; YLW=; RED=; RST=; fi
 die()  { printf '%serror:%s %s\n' "$RED" "$RST" "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
-# portable temp (BSD/macOS mktemp needs an explicit template; GNU is fine with one too)
-mktmp()  { mktemp     "${TMPDIR:-/tmp}/swoop.XXXXXXXX"; }
-mktmpd() { mktemp -d  "${TMPDIR:-/tmp}/swoop.XXXXXXXX"; }
+# portable temp (BSD/macOS mktemp needs an explicit template; GNU is fine with one too).
+# macOS TMPDIR ends with a slash — strip it, or temp paths grow a "//" that breaks
+# prefix comparisons downstream (e.g. the NODE_PLUGINS containment check).
+_tmpbase() { local t="${TMPDIR:-/tmp}"; printf '%s' "${t%/}"; }
+mktmp()  { mktemp     "$(_tmpbase)/swoop.XXXXXXXX"; }
+mktmpd() { mktemp -d  "$(_tmpbase)/swoop.XXXXXXXX"; }
 tty_ok()   { { true </dev/tty; } 2>/dev/null; }
 read_tty() { if tty_ok; then IFS= read -r "$1" </dev/tty; else IFS= read -r "$1"; fi; }
 
@@ -402,7 +405,7 @@ fetch(url).then(r => r.json()).then(d => {
 # marketplace entry declares — no second clone).
 NODE_PLUGINS='
 const fs=require("fs"),path=require("path");
-const root=process.argv[1];
+const root=path.resolve(process.argv[1]);   // normalize: localDir compares path prefixes
 function readJSON(p){try{return JSON.parse(fs.readFileSync(p,"utf8"));}catch{return null;}}
 function localDir(src){
   if(typeof src!=="string") return null;
@@ -460,7 +463,9 @@ for(const m of manifests){
     fl.add(m.agent);
     const cur=plugins.get(p.name)||{desc:"",flags:new Set(),rel:""};
     if(!cur.desc&&p.description) cur.desc=String(p.description).replace(/\s+/g," ").trim();
-    if(!cur.rel&&dir) cur.rel=path.relative(root,dir);
+    // relpath feeds codex vendoring: the codex manifest may point at a different
+    // dir than the claude one (e.g. ./codex-plugin vs ./claude-plugin) — it wins
+    if(dir&&(m.agent==="codex"||!cur.rel)) cur.rel=path.relative(root,dir);
     for(const f of fl) cur.flags.add(f);
     plugins.set(p.name,cur);
   }
