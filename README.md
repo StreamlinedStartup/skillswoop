@@ -105,7 +105,9 @@ swoop plugin remove code-simplifier@claude-plugins-official
 swoop mkt remove anthropics/claude-plugins-official
 ```
 
-A marketplace repo may only ship one agent's manifest format — swoop installs to the agents it can and warns about the ones it skipped. Installing a hook-bearing plugin for Codex offers to enable `codex features.hooks` first (`--no-hooks-enable` skips that). `-g` maps to Claude's user scope; Codex plugins are always user-wide.
+A marketplace repo may only ship one agent's manifest format — swoop installs to the agents it can and warns about the ones it skipped. Installing a hook-bearing plugin for Codex offers to enable `codex features.hooks` first (`--no-hooks-enable` skips that).
+
+Scopes: `-g` installs user-wide (Claude `--scope user`, `codex plugin add`). In the default project scope, Claude installs with `--scope project`, and Codex plugins are **vendored into the repo** — copied to `./plugins/<name>/` and registered in `./.agents/plugins/marketplace.json`, which Codex auto-discovers. Finish inside Codex with `/plugins` (install & enable) and `/hooks` (trust the plugin's hooks).
 
 ## Where skills are installed
 

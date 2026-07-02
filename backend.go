@@ -301,13 +301,14 @@ func listPlugins(src string) ([]item, error) {
 }
 
 // parsePlugins parses `_plugins` output: an "@marketplace<TAB>claude<TAB>codex"
-// header, then "name<TAB>desc<TAB>flags" plugin lines.
+// header, then "name<TAB>desc<TAB>flags<TAB>relpath" plugin lines (the relpath
+// column is engine-internal vendoring data and ignored here).
 func parsePlugins(out string) (claudeName, codexName string, items []item) {
 	for _, ln := range strings.Split(out, "\n") {
 		if strings.TrimSpace(ln) == "" {
 			continue
 		}
-		f := strings.SplitN(ln, "\t", 3)
+		f := strings.SplitN(ln, "\t", 4)
 		if f[0] == "@marketplace" {
 			if len(f) > 1 {
 				claudeName = f[1]

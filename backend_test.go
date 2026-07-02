@@ -27,7 +27,7 @@ func TestListParsersDedupeItems(t *testing.T) {
 
 func TestParsePlugins(t *testing.T) {
 	out := "@marketplace\tcm\txm\n" +
-		"hooky\tHooks and mcp.\tclaude,codex,hooks,mcp\n" +
+		"hooky\tHooks and mcp.\tclaude,codex,hooks,mcp\tplugins/hooky\n" + // relpath col ignored
 		"plain\t\tclaude\n" +
 		"hooky\tdupe\tclaude\n" +
 		"\n"
