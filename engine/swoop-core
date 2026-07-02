@@ -26,6 +26,9 @@
 #   swoop star <src> <skill> remember skills for quick reuse
 #   swoop unstar <src> <skill>...
 #   swoop list | remove | agents
+#   swoop mkt add|list|remove|update      plugin marketplaces (claude + codex)
+#   swoop plugin install <mkt> <plugin>...   install plugins via the native CLIs
+#   swoop plugin list | remove <plugin[@marketplace]>...
 #
 # Flags: -g/--global, --link (symlink vs copy), --no-copy (when adding a local
 #        skill), --dry-run, and `-- <args>` passed straight to `npx skills`.
@@ -49,12 +52,13 @@ SOURCES="$CONFIG_DIR/sources"
 AGENTS_FILE="$CONFIG_DIR/agents"
 PROJECTS="$CONFIG_DIR/projects"          # dirs we've installed into (for `update --all`)
 STARS="$CONFIG_DIR/stars"                # source<TAB>skill<TAB>description
+MARKETPLACES="$CONFIG_DIR/marketplaces"  # source<TAB>claude_name<TAB>codex_name
 LIBRARY="$DATA_DIR/library"
 DEFAULT_AGENTS="claude-code codex"
 SKILLS_CMD=(npx --yes skills)               # override via $SWOOP_SKILLS_CMD
 SEARCH_API="${SWOOP_SEARCH_API:-https://skills.sh}"
 
-SCOPE="project"; COPY_LOCAL=1; COPY=1; DRYRUN="${SWOOP_DRYRUN:-}"
+SCOPE="project"; COPY_LOCAL=1; COPY=1; DRYRUN="${SWOOP_DRYRUN:-}"; NO_HOOKS_ENABLE=""
 declare -a EXTRA=() ARGS=()
 
 # ---- pretty -------------------------------------------------------------
@@ -134,6 +138,26 @@ remove_star() {
   awk -F '\t' -v src="$src" -v skill="$skill" '!(($1==src)&&($2==skill))' "$STARS" > "$tmp" 2>/dev/null || :
   mv "$tmp" "$STARS"
 }
+save_marketplace() {  # $1 source  $2 claude_name  $3 codex_name
+  local src="$1" cn="${2:-}" xn="${3:-}" tmp
+  mkdir -p "$CONFIG_DIR"; touch "$MARKETPLACES"; tmp="$(mktmp)"
+  awk -F '\t' -v src="$src" '$1!=src' "$MARKETPLACES" > "$tmp" 2>/dev/null || :
+  printf '%s\t%s\t%s\n' "$src" "$cn" "$xn" >> "$tmp"
+  mv "$tmp" "$MARKETPLACES"
+}
+remove_marketplace() {
+  local src="$1" tmp
+  [ -f "$MARKETPLACES" ] || return 0
+  tmp="$(mktmp)"
+  awk -F '\t' -v src="$src" '$1!=src' "$MARKETPLACES" > "$tmp" 2>/dev/null || :
+  mv "$tmp" "$MARKETPLACES"
+}
+marketplace_line() {  # $1 source; prints the cached "src<TAB>claude<TAB>codex" line
+  [ -f "$MARKETPLACES" ] || return 1
+  local line; line="$(awk -F '\t' -v src="$1" '$1==src{print; exit}' "$MARKETPLACES")"
+  [ -n "$line" ] || return 1
+  printf '%s\n' "$line"
+}
 prune_stars_for_sources() {
   [ -f "$STARS" ] || return 0
   [ "$#" -gt 0 ] || return 0
@@ -195,6 +219,24 @@ gh_slug() {
     */tree/*) local b="${rest#*tree/}"; b="${b%%/*}"; printf '%s/%s#%s\n' "$owner" "$repo" "$b" ;;
     *) printf '%s/%s\n' "$owner" "$repo" ;;
   esac
+}
+
+# shallow-clone a GitHub source into an existing empty dir: gh first (handles
+# private repos), plain git as the fallback. Shared by skill and plugin listing.
+clone_source() {  # $1 source  $2 tmpdir
+  local src="$1" tmp="$2"
+  local slug; slug="$(gh_slug "$src")" || return 1
+  local branch=""; case "$slug" in *\#*) branch="${slug#*#}"; slug="${slug%#*}" ;; esac
+  if have gh; then
+    local -a g=( repo clone "$slug" "$tmp" -- --depth 1 --quiet )
+    [ -n "$branch" ] && g+=( --branch "$branch" )
+    gh "${g[@]}" 2>"$ERRTO" && return 0
+  fi
+  if have git; then
+    local -a g=( clone --depth 1 --quiet ); [ -n "$branch" ] && g+=( --branch "$branch" )
+    git "${g[@]}" "https://github.com/$slug.git" "$tmp" 2>"$ERRTO" && return 0
+  fi
+  return 1
 }
 
 # node: walk a directory, print "name<TAB>description" for each SKILL.md found
@@ -271,17 +313,8 @@ list_skills_in() {
   local branch=""; case "$slug" in *\#*) branch="${slug#*#}"; slug="${slug%#*}" ;; esac
 
   # primary: shallow clone (fast, single op; gh handles private repos, git covers public)
-  local tmp ok=1; tmp="$(mktmpd)" || return 1
-  if have gh; then
-    local -a g=( repo clone "$slug" "$tmp" -- --depth 1 --quiet )
-    [ -n "$branch" ] && g+=( --branch "$branch" )
-    gh "${g[@]}" 2>"$ERRTO" && ok=0
-  fi
-  if [ "$ok" != 0 ] && have git; then               # fall back to plain git (public repos)
-    local -a g=( clone --depth 1 --quiet ); [ -n "$branch" ] && g+=( --branch "$branch" )
-    git "${g[@]}" "https://github.com/$slug.git" "$tmp" 2>"$ERRTO" && ok=0
-  fi
-  if [ "$ok" = 0 ]; then
+  local tmp; tmp="$(mktmpd)" || return 1
+  if clone_source "$src" "$tmp"; then
     node -e "$NODE_WALK" "$tmp"; local rc=$?
     rm -rf "$tmp"; return $rc
   fi
@@ -337,6 +370,154 @@ fetch(url).then(r => r.json()).then(d => {
   }
 }).catch(e => { process.stderr.write("search failed: " + e.message + "\n"); process.exit(3); });
 '
+
+# node: read both plugin-marketplace manifests in a checkout and print
+#   @marketplace<TAB>claude_name<TAB>codex_name
+#   name<TAB>desc<TAB>flags        (flags: claude,codex,hooks,mcp,commands,agents,skills)
+# Plugins are deduped by name across formats (flags unioned). Component badges are
+# exact for relative-path plugin sources (we inspect the dir) and best-effort for
+# external-repo sources (only what the marketplace entry declares — no second clone).
+NODE_PLUGINS='
+const fs=require("fs"),path=require("path");
+const root=process.argv[1];
+function readJSON(p){try{return JSON.parse(fs.readFileSync(p,"utf8"));}catch{return null;}}
+function localDir(src){
+  if(typeof src!=="string") return null;
+  if(!/^\.{0,2}\//.test(src)&&src!==".") return null;      // relative paths only
+  const p=path.resolve(root,src);
+  if(!(p+path.sep).startsWith(root+path.sep)&&p!==root) return null;
+  try{ if(fs.statSync(p).isDirectory()) return p; }catch{}
+  return null;
+}
+function compFlags(dir,entry){
+  const flags=new Set(); const e=entry||{};
+  if(e.hooks) flags.add("hooks");
+  if(e.mcpServers||e.mcp) flags.add("mcp");
+  if(e.commands) flags.add("commands");
+  if(e.agents) flags.add("agents");
+  if(e.skills) flags.add("skills");
+  if(dir){
+    const has=p=>{try{fs.statSync(path.join(dir,p));return true;}catch{return false;}};
+    if(has("hooks/hooks.json")) flags.add("hooks");
+    if(has(".mcp.json")) flags.add("mcp");
+    if(has("commands")) flags.add("commands");
+    if(has("agents")) flags.add("agents");
+    if(has("skills")) flags.add("skills");
+    const pj=readJSON(path.join(dir,".claude-plugin/plugin.json"))||readJSON(path.join(dir,"plugin.json"));
+    if(pj){
+      if(pj.hooks) flags.add("hooks");
+      if(pj.mcpServers) flags.add("mcp");
+      if(pj.commands) flags.add("commands");
+      if(pj.agents) flags.add("agents");
+      if(pj.skills) flags.add("skills");
+    }
+  }
+  return flags;
+}
+const manifests=[
+  {file:".claude-plugin/marketplace.json",agent:"claude"},
+  {file:".agents/plugins/marketplace.json",agent:"codex"},
+];
+const names={claude:"",codex:""};
+const plugins=new Map();
+let found=false;
+for(const m of manifests){
+  const mj=readJSON(path.join(root,m.file));
+  if(!mj) continue;
+  found=true;
+  names[m.agent]=typeof mj.name==="string"?mj.name:"";
+  for(const p of (Array.isArray(mj.plugins)?mj.plugins:[])){
+    if(!p||typeof p.name!=="string"||!p.name) continue;
+    const fl=compFlags(localDir(p.source),p);
+    fl.add(m.agent);
+    const cur=plugins.get(p.name)||{desc:"",flags:new Set()};
+    if(!cur.desc&&p.description) cur.desc=String(p.description).replace(/\s+/g," ").trim();
+    for(const f of fl) cur.flags.add(f);
+    plugins.set(p.name,cur);
+  }
+}
+if(!found) process.exit(4);
+process.stdout.write("@marketplace\t"+names.claude+"\t"+names.codex+"\n");
+const order=["claude","codex","hooks","mcp","commands","agents","skills"];
+for(const [name,info] of plugins){
+  let desc=info.desc; if(desc.length>100) desc=desc.slice(0,99)+"…";
+  process.stdout.write(name+"\t"+desc+"\t"+order.filter(f=>info.flags.has(f)).join(",")+"\n");
+}
+'
+
+# list plugins in a marketplace source (header + per-plugin lines); nonzero if it cannot
+list_plugins_in() {
+  local src="$1"
+  have node || return 1
+  if is_local "$src"; then
+    local base; base="$(resolve_local "$src" 2>/dev/null)" || return 1
+    node -e "$NODE_PLUGINS" "$base"; return $?
+  fi
+  local tmp; tmp="$(mktmpd)" || return 1
+  if clone_source "$src" "$tmp"; then
+    node -e "$NODE_PLUGINS" "$tmp"; local rc=$?
+    rm -rf "$tmp"; return $rc
+  fi
+  rm -rf "$tmp"; return 1
+}
+
+# node: merge `claude plugin list --json` + `codex plugin list --json` dumps
+# (file per agent, "" = unavailable) into "name@marketplace<TAB>agents<TAB>desc"
+NODE_PLUGINS_INSTALLED='
+const fs=require("fs");
+const files=[["claude",process.argv[1]],["codex",process.argv[2]]];
+const map=new Map();
+for(const [agent,f] of files){
+  if(!f) continue;
+  let raw=""; try{raw=fs.readFileSync(f,"utf8");}catch{continue;}
+  let d; try{d=JSON.parse(raw);}catch{process.stderr.write("warn: unparseable "+agent+" plugin list JSON\n");continue;}
+  const arr=Array.isArray(d)?d:(Array.isArray(d.plugins)?d.plugins:(Array.isArray(d.items)?d.items:[]));
+  for(const p of arr){
+    if(!p) continue;
+    const name=p.name||p.id||"";
+    if(!name) continue;
+    const mkt=p.marketplace||p.marketplaceName||p.source||"";
+    const key=mkt?name+"@"+mkt:name;
+    const cur=map.get(key)||{agents:new Set(),desc:""};
+    cur.agents.add(agent);
+    if(!cur.desc&&p.description) cur.desc=String(p.description).replace(/\s+/g," ").trim();
+    map.set(key,cur);
+  }
+}
+for(const [key,info] of map){
+  let desc=info.desc; if(desc.length>100) desc=desc.slice(0,99)+"…";
+  process.stdout.write(key+"\t"+[...info.agents].join(",")+"\t"+desc+"\n");
+}
+'
+
+# installed plugins across both agent CLIs; tolerates either CLI missing
+plugins_installed() {
+  have node || return 1
+  local cf="" xf="" t
+  if have claude; then
+    t="$(mktmp)"
+    if claude plugin list --json > "$t" 2>"$ERRTO"; then cf="$t"
+    else rm -f "$t"; printf '%swarn:%s could not list claude plugins\n' "$YLW" "$RST" >&2; fi
+  else printf '%swarn:%s claude CLI not found\n' "$YLW" "$RST" >&2; fi
+  if have codex; then
+    t="$(mktmp)"
+    if codex plugin list --json > "$t" 2>"$ERRTO"; then xf="$t"
+    else rm -f "$t"; printf '%swarn:%s could not list codex plugins\n' "$YLW" "$RST" >&2; fi
+  else printf '%swarn:%s codex CLI not found\n' "$YLW" "$RST" >&2; fi
+  node -e "$NODE_PLUGINS_INSTALLED" "$cf" "$xf"
+  [ -n "$cf" ] && rm -f "$cf"; [ -n "$xf" ] && rm -f "$xf"
+  return 0
+}
+
+# codex features.hooks state: prints on/off/n-a ("n/a" never blocks installs)
+codex_hooks_state() {
+  have codex || { printf 'n/a\n'; return 0; }
+  local out st
+  out="$(codex features list 2>"$ERRTO")" || { printf 'n/a\n'; return 0; }
+  st="$(printf '%s\n' "$out" | awk '$1=="hooks"{print $3; exit}')"
+  case "$st" in true|enabled) st=on ;; false|disabled) st=off ;; on|off) ;; *) st="n/a" ;; esac
+  printf '%s\n' "$st"
+}
 
 # ---- commands -----------------------------------------------------------
 cmd_add() {
@@ -551,6 +732,173 @@ cmd_stash() {
   printf '%sDone.%s moved %s · unlinked %s · kept %s · failed %s\n' "$GRN" "$RST" "$moved" "$unlinked" "$skipped" "$failed"
 }
 
+# ---- plugin marketplaces --------------------------------------------------
+cmd_mkt() {
+  local verb="${1:-}"; [ "$#" -gt 0 ] && shift
+  case "$verb" in
+    add)            mkt_add "$@" ;;
+    list|ls)        mkt_list ;;
+    remove|rm)      mkt_remove "$@" ;;
+    update|upgrade) mkt_update ;;
+    *) die "usage: swoop mkt add <source>... | list | remove <source>... | update" ;;
+  esac
+}
+
+mkt_add() {
+  [ "$#" -ge 1 ] || die "usage: swoop mkt add <owner/repo | url | path> ..."
+  local src header cn xn a rc=0
+  for src in "$@"; do
+    printf '%sreading marketplace manifests from %s …%s\n' "$DIM" "$src" "$RST" >&2
+    header="$(list_plugins_in "$src" 2>"$ERRTO" | head -n1)" || true
+    case "$header" in "@marketplace"*) ;; *)
+      printf '%swarn:%s no plugin marketplace manifest found in %s\n' "$YLW" "$RST" "$src" >&2
+      rc=1; continue ;;
+    esac
+    cn="$(printf '%s\n' "$header" | cut -f2)"
+    xn="$(printf '%s\n' "$header" | cut -f3)"
+    local did=0
+    for a in $(load_agents); do
+      case "$a" in
+        claude-code)
+          if [ -z "$cn" ]; then
+            printf '%swarn:%s skipped claude-code — no .claude-plugin/marketplace.json in %s\n' "$YLW" "$RST" "$src"
+          elif run_skills claude plugin marketplace add "$src"; then did=1
+          else printf '%swarn:%s claude marketplace add failed for %s\n' "$YLW" "$RST" "$src" >&2; fi ;;
+        codex)
+          if [ -z "$xn" ]; then
+            printf '%swarn:%s skipped codex — no .agents/plugins/marketplace.json in %s\n' "$YLW" "$RST" "$src"
+          elif run_skills codex plugin marketplace add "$src"; then did=1
+          else printf '%swarn:%s codex marketplace add failed for %s\n' "$YLW" "$RST" "$src" >&2; fi ;;
+        *) printf '%swarn:%s skipped %s — plugins are not supported for it\n' "$YLW" "$RST" "$a" ;;
+      esac
+    done
+    if [ "$did" = 1 ]; then
+      save_marketplace "$src" "$cn" "$xn"
+      printf '  %sadded%s marketplace %s\n' "$GRN" "$RST" "$src"
+    else rc=1; fi
+  done
+  return $rc
+}
+
+mkt_list() {
+  if [ -s "$MARKETPLACES" ]; then
+    awk -F '\t' '{printf "%s\tclaude:%s\tcodex:%s\n", $1, ($2==""?"-":$2), ($3==""?"-":$3)}' "$MARKETPLACES"
+  else printf 'no marketplaces. add one: swoop mkt add <source>\n'; fi
+}
+
+mkt_remove() {
+  [ "$#" -ge 1 ] || die "usage: swoop mkt remove <source>..."
+  local src line cn xn
+  for src in "$@"; do
+    if ! line="$(marketplace_line "$src")"; then
+      printf '%swarn:%s unknown marketplace %s\n' "$YLW" "$RST" "$src" >&2; continue
+    fi
+    cn="$(printf '%s\n' "$line" | cut -f2)"
+    xn="$(printf '%s\n' "$line" | cut -f3)"
+    if [ -n "$cn" ] && have claude; then
+      run_skills claude plugin marketplace remove "$cn" \
+        || printf '%swarn:%s claude marketplace remove failed for %s\n' "$YLW" "$RST" "$cn" >&2
+    fi
+    if [ -n "$xn" ] && have codex; then
+      run_skills codex plugin marketplace remove "$xn" \
+        || printf '%swarn:%s codex marketplace remove failed for %s\n' "$YLW" "$RST" "$xn" >&2
+    fi
+    remove_marketplace "$src"
+    printf '  removed %s\n' "$src"
+  done
+}
+
+mkt_update() {
+  local did=0
+  if have claude; then run_skills claude plugin marketplace update || :; did=1; fi
+  if have codex; then run_skills codex plugin marketplace upgrade || :; did=1; fi
+  [ "$did" = 1 ] || printf '%sneither the claude nor the codex CLI is on PATH.%s\n' "$YLW" "$RST"
+}
+
+# ---- plugins ---------------------------------------------------------------
+cmd_plugin() {
+  local verb="${1:-}"; [ "$#" -gt 0 ] && shift
+  case "$verb" in
+    install|add)        plugin_install "$@" ;;
+    remove|rm|uninstall) plugin_remove "$@" ;;
+    list|ls)            plugins_installed ;;
+    *) die "usage: swoop plugin install <source> <plugin>... | list | remove <plugin[@marketplace]>..." ;;
+  esac
+}
+
+plugin_install() {
+  [ "$#" -ge 2 ] || die "usage: swoop plugin install <source> <plugin>..."
+  local src="$1"; shift
+  local line
+  if ! line="$(marketplace_line "$src")"; then
+    if ui_confirm "Marketplace $src is not added yet. Add it now?"; then
+      mkt_add "$src" || die "could not add marketplace $src"
+      line="$(marketplace_line "$src")" || die "marketplace $src was not saved"
+    else
+      die "unknown marketplace: $src (add it first: swoop mkt add $src)"
+    fi
+  fi
+  local cn xn
+  cn="$(printf '%s\n' "$line" | cut -f2)"
+  xn="$(printf '%s\n' "$line" | cut -f3)"
+  local plist; plist="$(list_plugins_in "$src" 2>"$ERRTO" || true)"   # for hooks badges
+  local p a flags ok=0 hooks_prompted=0
+  for p in "$@"; do
+    flags="$(printf '%s\n' "$plist" | awk -F '\t' -v p="$p" '$1==p{print $3; exit}')"
+    for a in $(load_agents); do
+      case "$a" in
+        claude-code)
+          if [ -z "$cn" ]; then
+            printf '%swarn:%s skipped claude-code for %s — marketplace has no Claude format\n' "$YLW" "$RST" "$p"
+            continue
+          fi
+          local scope=project; [ "$SCOPE" = global ] && scope=user
+          if run_skills claude plugin install "$p@$cn" --scope "$scope"; then ok=1
+          else printf '%swarn:%s claude install failed for %s\n' "$YLW" "$RST" "$p" >&2; fi ;;
+        codex)
+          if [ -z "$xn" ]; then
+            printf '%swarn:%s skipped codex for %s — marketplace has no Codex format\n' "$YLW" "$RST" "$p"
+            continue
+          fi
+          [ "$SCOPE" = global ] || printf '%snote:%s codex plugins install user-wide (codex has no project scope)\n' "$DIM" "$RST"
+          case ",$flags," in *,hooks,*)
+            if [ "$hooks_prompted" = 0 ] && [ -z "$NO_HOOKS_ENABLE" ] && [ "$(codex_hooks_state)" = off ]; then
+              hooks_prompted=1
+              if ui_confirm "Enable Codex hooks (features.hooks) so this plugin's hooks run?"; then
+                run_skills codex features enable hooks \
+                  || printf '%swarn:%s could not enable codex hooks\n' "$YLW" "$RST" >&2
+              else
+                printf '%swarn:%s codex hooks stay disabled — the plugin'\''s hooks will not run\n' "$YLW" "$RST" >&2
+              fi
+            fi ;;
+          esac
+          if run_skills codex plugin add "$p@$xn"; then ok=1
+          else printf '%swarn:%s codex install failed for %s\n' "$YLW" "$RST" "$p" >&2; fi ;;
+        *) printf '%swarn:%s skipped %s — plugins are not supported for it\n' "$YLW" "$RST" "$a" ;;
+      esac
+    done
+  done
+  [ "$ok" = 1 ] || { printf '%serror:%s no plugin installed for any agent\n' "$RED" "$RST" >&2; return 1; }
+  return 0
+}
+
+plugin_remove() {
+  [ "$#" -ge 1 ] || die "usage: swoop plugin remove <plugin[@marketplace]>..."
+  local p ok=0
+  for p in "$@"; do
+    if have claude; then
+      if run_skills claude plugin uninstall "$p"; then ok=1
+      else printf '%swarn:%s claude uninstall failed for %s\n' "$YLW" "$RST" "$p" >&2; fi
+    fi
+    if have codex; then
+      if run_skills codex plugin remove "$p"; then ok=1
+      else printf '%swarn:%s codex remove failed for %s\n' "$YLW" "$RST" "$p" >&2; fi
+    fi
+  done
+  [ "$ok" = 1 ] || { printf '%serror:%s nothing removed (are the agent CLIs installed?)\n' "$RED" "$RST" >&2; return 1; }
+  return 0
+}
+
 # ---- interactive home screen --------------------------------------------
 cmd_menu() {
   while :; do
@@ -608,7 +956,7 @@ menu_agents() {
   cmd_agents $line
 }
 
-usage() { sed -n '3,38p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; }
+usage() { sed -n '3,41p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; }
 
 # ---- arg parsing --------------------------------------------------------
 [ -n "${SWOOP_SKILLS_CMD:-}" ] && read -r -a SKILLS_CMD <<< "$SWOOP_SKILLS_CMD"
@@ -621,8 +969,9 @@ while [ $# -gt 0 ]; do
     --link)      COPY=0 ;;
     --no-copy)   COPY_LOCAL=0 ;;
     --dry-run)   DRYRUN=1 ;;
+    --no-hooks-enable) NO_HOOKS_ENABLE=1 ;;
     -h|--help)   usage; exit 0 ;;
-    add|save|use|install|update|upgrade|browse|list|ls|stars|star|unstar|remove|rm|agents|stash|migrate|menu|_skills|_search|_sources|_projects)
+    add|save|use|install|update|upgrade|browse|list|ls|stars|star|unstar|remove|rm|agents|stash|migrate|menu|mkt|marketplace|plugin|plugins|_skills|_search|_sources|_projects|_mkts|_plugins|_plugins_installed|_codex_hooks)
       if [ -z "$cmd" ]; then cmd="$1"; else ARGS+=("$1"); fi ;;
     *) ARGS+=("$1") ;;
   esac
@@ -646,6 +995,8 @@ case "$cmd" in
   list|ls)         cmd_list ;;
   remove|rm)       cmd_remove ${ARGS[@]+"${ARGS[@]}"} ;;
   agents)          cmd_agents ${ARGS[@]+"${ARGS[@]}"} ;;
+  mkt|marketplace) cmd_mkt ${ARGS[@]+"${ARGS[@]}"} ;;
+  plugin|plugins)  cmd_plugin ${ARGS[@]+"${ARGS[@]}"} ;;
   # ---- machine-readable helpers for the TUI front-end (stable, undocumented) ----
   _skills)         [ "${#ARGS[@]}" -ge 1 ] || die "usage: swoop _skills <source>"
                    list_skills_in "${ARGS[0]}" ;;                 # prints name<TAB>desc
@@ -653,5 +1004,10 @@ case "$cmd" in
                    node -e "$NODE_SEARCH" "${ARGS[*]:-}" ;;       # prints source<TAB>name<TAB>installs
   _sources)        [ -s "$SOURCES" ] && cat "$SOURCES" || true ;;
   _projects)       [ -s "$PROJECTS" ] && cat "$PROJECTS" || true ;;
+  _mkts)           [ -s "$MARKETPLACES" ] && cat "$MARKETPLACES" || true ;;
+  _plugins)        [ "${#ARGS[@]}" -ge 1 ] || die "usage: swoop _plugins <source>"
+                   list_plugins_in "${ARGS[0]}" ;;                # header + name<TAB>desc<TAB>flags
+  _plugins_installed) plugins_installed ;;                        # name@mkt<TAB>agents<TAB>desc
+  _codex_hooks)    codex_hooks_state ;;                           # on / off / n/a
   *) usage; exit 1 ;;
 esac
