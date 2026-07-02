@@ -73,12 +73,16 @@ sequenceDiagram
 | `loadSkillsCmd(src)` | Ask engine for skills via `_skills` | `skillsMsg` |
 | `loadStarredCmd()` | Read `~/.config/swoop/stars` | `starredMsg` |
 | `searchCmd(q)` | Ask engine via `_search` | `searchMsg` |
+| `loadMarketsCmd()` | Read `~/.config/swoop/marketplaces` | `marketsMsg` |
+| `loadPluginsCmd(src)` | Ask engine for plugins via `_plugins` | `pluginsMsg` |
+| `loadInstalledPluginsCmd()` | Ask engine via `_plugins_installed` | `installedPluginsMsg` |
+| `codexHooksCmd()` | Ask engine via `_codex_hooks` | `codexHooksMsg` |
 | `opCmd(title, args...)` | Run any engine subcommand | `opDoneMsg` |
 | `flashFor(text, duration)` | Show a transient status message | `flashMsg` → `clearFlashMsg` |
 
 ## Screen state machine
 
-The TUI has 12 screens. `model.screen` is an enum (`scMenu`, `scSources`, etc.) that controls what `View()` renders and what keys `onKey()` responds to.
+The TUI has 16 screens. `model.screen` is an enum (`scMenu`, `scSources`, etc.) that controls what `View()` renders and what keys `onKey()` responds to.
 
 ```mermaid
 stateDiagram-v2
@@ -117,7 +121,23 @@ stateDiagram-v2
     scMenu --> scConfirm: "Tidy global"
     scConfirm --> scRunning: yes → opCmd
     scConfirm --> scMenu: no
+
+    scMenu --> scRunning: "Install plugins"
+    scRunning --> scMarkets: marketsMsg (non-empty)
+    scMarkets --> scRunning: enter marketplace
+    scRunning --> scPlugins: pluginsMsg (success)
+    scMarkets --> scConfirm: x (remove marketplace)
+    scMarkets --> scRunning: u → mkt update
+    scPlugins --> scRunning: install marked (no hooks) → opCmd
+    scPlugins --> scRunning: install marked (hooks) → codexHooksCmd
+    scRunning --> scConfirm: codexHooksMsg "off"
+    scMenu --> scAdd: "Add a marketplace"
+    scMenu --> scRunning: "Remove plugins"
+    scRunning --> scPluginRemove: installedPluginsMsg
+    scPluginRemove --> scRunning: remove marked → opCmd
 ```
+
+**The codex hooks round-trip**: installing a hook-flagged plugin with codex targeted parks the install args in `pendingInstall` and fires `_codex_hooks`. If the flag is `off`, `scConfirm` asks whether to enable it — *yes* runs the plain install (the engine auto-enables under `SWOOP_ASSUME_YES`), *no* runs the same install with `--no-hooks-enable` via the optional `denyCmd` hook on `scConfirm` (nil `denyCmd` keeps the old "no = go back" behavior). `on`/`n/a` installs directly.
 
 **The `scRunning → scResult → scMenu` cycle** is the main action loop: every operation goes through a spinner screen, lands on a result screen with scrollable output, then returns to the menu.
 
@@ -179,7 +199,7 @@ Layout math lives in `layout()` — calculates `innerW`/`innerH` accounting for 
 
 ### `menu.go` (185 lines)
 
-Defines the 10 main menu entries as `menuEntry` structs, each with an `act` function that returns a `(tea.Model, tea.Cmd)`. Also contains `installSelected()` which builds the engine command from marked skills.
+Defines the 13 main menu entries as `menuEntry` structs, each with an `act` function that returns a `(tea.Model, tea.Cmd)`. Also contains `installSelected()` which builds the engine command from marked skills, and `installSelectedPlugins()` which does the same for marked plugins (detouring through the codex hooks check when needed).
 
 ### `picker.go` (305 lines)
 
@@ -189,9 +209,10 @@ A self-contained, windowed, optionally multi-select list widget. Handles:
 - **Multi-select**: `toggle()`, `selectAll()`, `selected()`, `selectedCount()`
 - **Fuzzy filtering**: keeps all rows as backing state and filters visible indexes so marks and stars survive filtering
 - **Two-column rendering**: titles padded to `titleW` so descriptions align
+- **Component badges**: plugin rows with `hooks`/`mcp` in `item.flags` get dim `[hooks]` `[mcp]` badges between title and description (dropped when the row is too narrow)
 - **Scroll indicators**: `scrollFooter()` shows `▲ 3/29 ▼` + marked count
 
-The picker is reused for every list: menu, sources, skills, browse results, remove.
+The picker is reused for every list: menu, sources, skills, browse results, remove, marketplaces, plugins.
 
 ### `backend.go` (255 lines)
 
@@ -207,6 +228,10 @@ The bridge to the engine:
 | Star helpers (`stars.go`) | Read/write starred source/skill pairs |
 | `listSkills(src)` | Call `_skills`, parse tab-separated output |
 | `searchSkills(q)` | Call `_search`, parse tab-separated output |
+| `loadMarketplaces()` / `marketItems()` | Read `~/.config/swoop/marketplaces` (3-column TSV) |
+| `listPlugins(src)` / `parsePlugins()` | Call `_plugins`, parse header + `name<TAB>desc<TAB>flags` |
+| `listInstalledPlugins()` | Call `_plugins_installed`, parse merged plugin list |
+| `codexHooksState()` | Call `_codex_hooks` → `on`/`off`/`n/a` |
 
 Also contains `stripANSI()` (regex to remove ANSI escape codes) and config path helpers.
 

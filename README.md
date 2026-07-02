@@ -92,6 +92,21 @@ swoop list | swoop remove | swoop agents claude-code codex
 swoop --version
 ```
 
+## Plugins
+
+Both agents have native plugin systems (plugins bundle skills, hooks, MCP servers, and — for Claude — commands/agents; hooks auto-wire on install). swoop drives each agent's own plugin CLI and installs to every compatible configured agent at once. In the TUI: **Add a marketplace** → **Install plugins** (rows show `[hooks]` / `[mcp]` badges) → **Remove plugins**.
+
+```sh
+swoop mkt add anthropics/claude-plugins-official  # register a marketplace with claude + codex
+swoop mkt list | swoop mkt update                 # cached marketplaces / refresh them
+swoop plugin install anthropics/claude-plugins-official code-simplifier
+swoop plugin list                                 # installed plugins across both agents
+swoop plugin remove code-simplifier@claude-plugins-official
+swoop mkt remove anthropics/claude-plugins-official
+```
+
+A marketplace repo may only ship one agent's manifest format — swoop installs to the agents it can and warns about the ones it skipped. Installing a hook-bearing plugin for Codex offers to enable `codex features.hooks` first (`--no-hooks-enable` skips that). `-g` maps to Claude's user scope; Codex plugins are always user-wide.
+
 ## Where skills are installed
 
 By default skills install into the current directory:
@@ -104,7 +119,7 @@ via the `skills-lock.json` that `npx skills` writes.
 
 ## Files
 
-- Config: `~/.config/swoop/` — `sources`, `agents`, `projects`, `aliases`, `stars`
+- Config: `~/.config/swoop/` — `sources`, `agents`, `projects`, `aliases`, `stars`, `marketplaces`
 - Library (skills moved out by `swoop stash`): `~/.local/share/swoop/library/`
 - Engine cache: `~/Library/Caches/swoop/` (macOS) or `$XDG_CACHE_HOME/swoop/`
 
