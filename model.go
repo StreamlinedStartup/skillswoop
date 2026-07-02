@@ -25,6 +25,9 @@ const (
 	scConfirm              // generic yes/no
 	scRunning              // spinner while an op runs
 	scResult               // scrollable output of an op
+	scMarkets              // plugins: pick a marketplace
+	scPlugins              // plugins: multi-select plugins
+	scPluginRemove         // plugins: multi-select installed plugins to remove
 )
 
 // menu entries
@@ -51,16 +54,20 @@ type model struct {
 
 	entries []menuEntry
 
-	global      bool   // scope toggle (project default)
-	curSource   string // source being drilled into
-	renameURL   string // source whose alias is being edited (scRename)
-	filtering   bool   // true while slash-filtering repo skills
-	busyTitle   string
-	resultTitle string
-	resultErr   bool
-	confirmMsg  string
-	confirmCmd  func(m *model) tea.Cmd
-	flash       string // transient status note
+	global         bool     // scope toggle (project default)
+	curSource      string   // source being drilled into
+	curMarket      string   // marketplace being drilled into (scPlugins)
+	renameURL      string   // source whose alias is being edited (scRename)
+	filtering      bool     // true while slash-filtering repo skills/plugins
+	addMarketplace bool     // scAdd doubles as the add-marketplace input
+	pendingInstall []string // plugin-install args parked while _codex_hooks runs
+	busyTitle      string
+	resultTitle    string
+	resultErr      bool
+	confirmMsg     string
+	confirmCmd     func(m *model) tea.Cmd
+	denyCmd        func(m *model) tea.Cmd // optional "no" action in scConfirm (nil = just go back)
+	flash          string                 // transient status note
 
 	agents string
 }
@@ -76,6 +83,16 @@ type searchMsg struct {
 	err   error
 }
 type starredMsg struct{ items []item }
+type marketsMsg struct{ items []item }
+type pluginsMsg struct {
+	items []item
+	err   error
+}
+type installedPluginsMsg struct {
+	items []item
+	err   error
+}
+type codexHooksMsg struct{ state string }
 type opDoneMsg struct {
 	title  string
 	output string
@@ -131,6 +148,28 @@ func loadSkillsCmd(src string) tea.Cmd {
 
 func loadStarredCmd() tea.Cmd {
 	return func() tea.Msg { return starredMsg{starredItems()} }
+}
+
+func loadMarketsCmd() tea.Cmd {
+	return func() tea.Msg { return marketsMsg{marketItems()} }
+}
+
+func loadPluginsCmd(src string) tea.Cmd {
+	return func() tea.Msg {
+		items, err := listPlugins(src)
+		return pluginsMsg{items, err}
+	}
+}
+
+func loadInstalledPluginsCmd() tea.Cmd {
+	return func() tea.Msg {
+		items, err := listInstalledPlugins()
+		return installedPluginsMsg{items, err}
+	}
+}
+
+func codexHooksCmd() tea.Cmd {
+	return func() tea.Msg { return codexHooksMsg{codexHooksState()} }
 }
 
 func searchCmd(q string) tea.Cmd {

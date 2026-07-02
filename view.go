@@ -41,7 +41,8 @@ func heading(label, sub string) string {
 func (m *model) buildBody() string {
 	// defensive: list screens must never render before their picker exists
 	switch m.screen {
-	case scSources, scSkills, scStarred, scBrowseResults, scRemove:
+	case scSources, scSkills, scStarred, scBrowseResults, scRemove,
+		scMarkets, scPlugins, scPluginRemove:
 		if m.pick == nil {
 			return heading("LOADING", "") + "\n\n" + rowDesc.Render("  …")
 		}
@@ -84,10 +85,31 @@ func (m *model) buildBody() string {
 		return heading("REMOVE", "SPACE marks sources to forget · ENTER removes") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
+	case scMarkets:
+		return heading("PLUGINS", "pick a marketplace · x removes · u updates") + "\n\n" +
+			m.pick.view() + "\n" + m.pick.scrollFooter()
+
+	case scPlugins:
+		sub := "SPACE marks · / filters · ENTER installs marked"
+		if m.filtering {
+			return heading("PLUGINS · "+short(m.curMarket), sub) + "\n" +
+				m.input.View() + "\n" +
+				m.pick.view() + "\n" + m.pick.scrollFooter()
+		}
+		return heading("PLUGINS · "+short(m.curMarket), sub) + "\n\n" +
+			m.pick.view() + "\n" + m.pick.scrollFooter()
+
+	case scPluginRemove:
+		return heading("REMOVE plugins", "SPACE marks plugins to uninstall · ENTER removes") + "\n\n" +
+			m.pick.view() + "\n" + m.pick.scrollFooter()
+
 	case scBrowseInput:
 		return m.inputBody("BROWSE skills.sh", "type a keyword, then ENTER")
 
 	case scAdd:
+		if m.addMarketplace {
+			return m.inputBody("ADD a marketplace", "a repo with a plugin marketplace manifest")
+		}
 		return m.inputBody("ADD a source", "owner/repo · git URL · local path")
 
 	case scAgents:
@@ -146,8 +168,16 @@ func (m *model) statusBar() string {
 		}
 	case scStarred:
 		keys = key("↑↓", "move") + key("space", "mark") + key("a", "all") + key("⏎", "install") + key("esc", "menu")
-	case scBrowseResults, scRemove:
+	case scBrowseResults, scRemove, scPluginRemove:
 		keys = key("↑↓", "move") + key("space", "mark") + key("⏎", "go") + key("esc", "back")
+	case scMarkets:
+		keys = key("↑↓", "move") + key("⏎", "open") + key("x", "remove") + key("u", "update") + key("esc", "back")
+	case scPlugins:
+		if m.filtering {
+			keys = key("type", "filter") + key("⏎", "list") + key("esc", "clear")
+		} else {
+			keys = key("↑↓", "move") + key("space", "mark") + key("/", "filter") + key("a", "all") + key("⏎", "install") + key("esc", "back")
+		}
 	case scBrowseInput, scAdd, scAgents:
 		keys = key("⏎", "confirm") + key("esc", "cancel")
 	case scConfirm:

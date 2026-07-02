@@ -20,7 +20,7 @@ func (m *model) layout() {
 	}
 	// body layout for list screens = heading(1) + blank(1) + list + footer(1)
 	listH := m.innerH - 3
-	if m.screen == scSkills && m.filtering {
+	if (m.screen == scSkills || m.screen == scPlugins) && m.filtering {
 		listH--
 	}
 	if listH < 1 {
@@ -101,6 +101,70 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = scStarred
 		return m, nil
 
+	case marketsMsg:
+		if len(msg.items) == 0 {
+			m.screen = scMenu
+			return m, flashFor("no marketplaces yet — Add a marketplace first", 0)
+		}
+		m.enterPicker(newPicker(msg.items, false))
+		m.screen = scMarkets
+		return m, nil
+
+	case pluginsMsg:
+		if msg.err != nil || len(msg.items) == 0 {
+			m.screen = scResult
+			m.resultTitle = "could not list plugins for " + short(m.curMarket)
+			m.resultErr = true
+			body := "The engine could not read the marketplace manifests.\n\n"
+			if msg.err != nil {
+				body += msg.err.Error() + "\n\n"
+			}
+			body += "Tip: run `SWOOP_DEBUG=1 swoop _plugins " + m.curMarket + "` to see clone/parse errors."
+			m.setResult(body)
+			return m, nil
+		}
+		m.enterPicker(newPicker(msg.items, true))
+		m.screen = scPlugins
+		return m, nil
+
+	case installedPluginsMsg:
+		if msg.err != nil || len(msg.items) == 0 {
+			m.screen = scMenu
+			return m, flashFor("no installed plugins found", 0)
+		}
+		m.enterPicker(newPicker(msg.items, true))
+		m.screen = scPluginRemove
+		return m, nil
+
+	case codexHooksMsg:
+		args := m.pendingInstall
+		m.pendingInstall = nil
+		if len(args) == 0 {
+			m.screen = scMenu
+			return m, nil
+		}
+		if msg.state == "off" {
+			m.prev = scPlugins
+			m.screen = scConfirm
+			m.confirmMsg = "Enable Codex hooks (features.hooks) so these plugins' hooks run?"
+			// yes: plain install — the engine auto-enables under SWOOP_ASSUME_YES
+			m.confirmCmd = func(mm *model) tea.Cmd {
+				mm.busyTitle = "installing plugin(s)"
+				mm.screen = scRunning
+				return opCmd("install plugins", args...)
+			}
+			// no: same install, but tell the engine to leave features.hooks alone
+			m.denyCmd = func(mm *model) tea.Cmd {
+				mm.busyTitle = "installing plugin(s)"
+				mm.screen = scRunning
+				return opCmd("install plugins", hooksDenyArgs(args)...)
+			}
+			return m, nil
+		}
+		m.busyTitle = "installing plugin(s)"
+		m.screen = scRunning
+		return m, opCmd("install plugins", args...)
+
 	case searchMsg:
 		if msg.err != nil || len(msg.items) == 0 {
 			m.screen = scMenu
@@ -161,7 +225,8 @@ func (m *model) activeList() *picker {
 	switch m.screen {
 	case scMenu:
 		return m.menu
-	case scSources, scSkills, scStarred, scBrowseResults, scRemove:
+	case scSources, scSkills, scStarred, scBrowseResults, scRemove,
+		scMarkets, scPlugins, scPluginRemove:
 		return m.pick
 	}
 	return nil
@@ -307,6 +372,108 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case scMarkets:
+		switch k {
+		case "esc", "q":
+			m.screen = scMenu
+		case "up", "k":
+			m.pick.move(-1)
+		case "down", "j":
+			m.pick.move(1)
+		case "home":
+			m.pick.home()
+		case "end":
+			m.pick.end()
+		case "tab":
+			m.global = !m.global
+		case "u":
+			m.busyTitle = "updating marketplaces"
+			m.screen = scRunning
+			return m, opCmd("marketplace update", "mkt", "update")
+		case "x":
+			if it, ok := m.pick.current(); ok {
+				src := it.id
+				m.prev = scMarkets
+				m.screen = scConfirm
+				m.confirmMsg = "Remove marketplace " + short(src) + " from claude + codex?"
+				m.confirmCmd = func(mm *model) tea.Cmd {
+					mm.busyTitle = "removing marketplace"
+					mm.screen = scRunning
+					return opCmd("removed marketplace", "mkt", "remove", src)
+				}
+			}
+		case "enter":
+			if it, ok := m.pick.current(); ok {
+				m.curMarket = it.id
+				m.busyTitle = "reading plugins from " + short(it.id)
+				m.screen = scRunning
+				return m, loadPluginsCmd(it.id)
+			}
+		}
+		return m, nil
+
+	case scPlugins:
+		if m.filtering {
+			return m.onFilterKey(msg)
+		}
+		switch k {
+		case "esc":
+			m.busyTitle = "loading marketplaces"
+			m.screen = scRunning
+			return m, loadMarketsCmd()
+		case "q":
+			m.screen = scMenu
+		case "/":
+			m.filtering = true
+			m.input.Placeholder = "filter plugins"
+			m.input.SetValue(m.pick.filter)
+			m.input.Focus()
+			m.layout()
+		case "up", "k":
+			m.pick.move(-1)
+		case "down", "j":
+			m.pick.move(1)
+		case "home":
+			m.pick.home()
+		case "end":
+			m.pick.end()
+		case " ":
+			m.pick.toggle()
+		case "a":
+			all := m.pick.visibleSelectedCount() < m.pick.len()
+			m.pick.selectAll(all)
+		case "tab":
+			m.global = !m.global
+		case "enter":
+			return m, m.installSelectedPlugins()
+		}
+		return m, nil
+
+	case scPluginRemove:
+		switch k {
+		case "esc", "q":
+			m.screen = scMenu
+		case "up", "k":
+			m.pick.move(-1)
+		case "down", "j":
+			m.pick.move(1)
+		case " ":
+			m.pick.toggle()
+		case "enter":
+			sel := m.pick.selected()
+			if len(sel) == 0 {
+				return m, flashFor("mark plugins with SPACE first", 0)
+			}
+			args := []string{"plugin", "remove"}
+			for _, it := range sel {
+				args = append(args, it.id)
+			}
+			m.busyTitle = "removing plugins"
+			m.screen = scRunning
+			return m, opCmd("removed plugins", args...)
+		}
+		return m, nil
+
 	case scStarred:
 		switch k {
 		case "esc", "q":
@@ -405,13 +572,21 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case scAdd:
 		switch k {
 		case "esc":
+			m.addMarketplace = false
 			m.screen = scMenu
 			return m, nil
 		case "enter":
 			v := strings.TrimSpace(m.input.Value())
 			if v == "" {
+				m.addMarketplace = false
 				m.screen = scMenu
 				return m, nil
+			}
+			if m.addMarketplace {
+				m.addMarketplace = false
+				m.busyTitle = "adding marketplace"
+				m.screen = scRunning
+				return m, opCmd("added marketplace", "mkt", "add", v)
 			}
 			m.busyTitle = "adding source"
 			m.screen = scRunning
@@ -444,8 +619,18 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case scConfirm:
 		switch k {
 		case "y", "Y", "enter":
+			m.denyCmd = nil
 			return m, m.confirmCmd(m)
-		case "n", "N", "esc", "q":
+		case "n", "N":
+			// an explicit "no" runs the deny action when one is set
+			// (e.g. install plugins without enabling codex hooks)
+			if deny := m.denyCmd; deny != nil {
+				m.denyCmd = nil
+				return m, deny(m)
+			}
+			m.screen = m.prev
+		case "esc", "q":
+			m.denyCmd = nil
 			m.screen = m.prev
 		}
 		return m, nil
@@ -466,6 +651,12 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// hooksDenyArgs is the deny path of the codex-hooks confirm: the same install,
+// but the engine must leave features.hooks untouched.
+func hooksDenyArgs(args []string) []string {
+	return append(append([]string(nil), args...), "--no-hooks-enable")
 }
 
 func removeSourcesCmd(args ...string) tea.Cmd {

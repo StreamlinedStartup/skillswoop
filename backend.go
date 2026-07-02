@@ -173,6 +173,50 @@ func starredItems() []item {
 	return items
 }
 
+// ---- plugin marketplaces (engine-maintained config) ----------------------
+// stored as "source<TAB>claude_name<TAB>codex_name" in ~/.config/swoop/marketplaces.
+type marketplace struct {
+	source string
+	claude string // marketplace name from .claude-plugin/marketplace.json ("" = absent)
+	codex  string // marketplace name from .agents/plugins/marketplace.json ("" = absent)
+}
+
+func loadMarketplaces() []marketplace {
+	var out []marketplace
+	for _, ln := range readLines(filepath.Join(configDir(), "marketplaces")) {
+		f := strings.SplitN(ln, "\t", 3)
+		m := marketplace{source: strings.TrimSpace(f[0])}
+		if len(f) > 1 {
+			m.claude = strings.TrimSpace(f[1])
+		}
+		if len(f) > 2 {
+			m.codex = strings.TrimSpace(f[2])
+		}
+		if m.source != "" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func marketItems() []item {
+	mkts := loadMarketplaces()
+	items := make([]item, len(mkts))
+	for i, mk := range mkts {
+		desc := ""
+		switch {
+		case mk.claude != "" && mk.codex != "":
+			desc = "claude + codex"
+		case mk.claude != "":
+			desc = "claude only"
+		case mk.codex != "":
+			desc = "codex only"
+		}
+		items[i] = item{id: mk.source, title: mk.source, desc: desc}
+	}
+	return items
+}
+
 func loadAgents() string {
 	a := readLines(filepath.Join(configDir(), "agents"))
 	if len(a) == 0 {
@@ -218,6 +262,116 @@ func searchSkills(q string) ([]item, error) {
 		items = append(items, item{id: src, title: src, desc: desc})
 	}
 	return dedupeItems(items), nil
+}
+
+// listPlugins asks the engine for a marketplace's plugins, annotating plugins
+// that only exist for one of the two plugin-capable agents.
+func listPlugins(src string) ([]item, error) {
+	out, err := core("_plugins", src)
+	if err != nil {
+		return nil, err
+	}
+	_, _, items := parsePlugins(out)
+	agents := loadAgents()
+	wantClaude := strings.Contains(agents, "claude-code")
+	wantCodex := strings.Contains(agents, "codex")
+	for i, it := range items {
+		if !wantClaude || !wantCodex {
+			continue
+		}
+		if hasFlag(it.flags, "claude") && !hasFlag(it.flags, "codex") {
+			items[i].desc = suffixNote(it.desc, "claude only")
+		} else if hasFlag(it.flags, "codex") && !hasFlag(it.flags, "claude") {
+			items[i].desc = suffixNote(it.desc, "codex only")
+		}
+	}
+	return items, nil
+}
+
+// parsePlugins parses `_plugins` output: an "@marketplace<TAB>claude<TAB>codex"
+// header, then "name<TAB>desc<TAB>flags" plugin lines.
+func parsePlugins(out string) (claudeName, codexName string, items []item) {
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		f := strings.SplitN(ln, "\t", 3)
+		if f[0] == "@marketplace" {
+			if len(f) > 1 {
+				claudeName = f[1]
+			}
+			if len(f) > 2 {
+				codexName = f[2]
+			}
+			continue
+		}
+		it := item{id: f[0], title: f[0]}
+		if len(f) > 1 {
+			it.desc = f[1]
+		}
+		if len(f) > 2 {
+			it.flags = f[2]
+		}
+		items = append(items, it)
+	}
+	return claudeName, codexName, dedupeItems(items)
+}
+
+// listInstalledPlugins merges both agents' installed plugins via the engine
+// ("name@marketplace<TAB>agents<TAB>desc"; warn lines have no tab and are skipped).
+func listInstalledPlugins() ([]item, error) {
+	out, err := core("_plugins_installed")
+	if err != nil {
+		return nil, err
+	}
+	var items []item
+	for _, ln := range strings.Split(out, "\n") {
+		if !strings.Contains(ln, "\t") {
+			continue
+		}
+		f := strings.SplitN(ln, "\t", 3)
+		it := item{id: f[0], title: f[0], desc: f[1]}
+		if len(f) > 2 && strings.TrimSpace(f[2]) != "" {
+			it.desc = f[1] + "  ·  " + f[2]
+		}
+		items = append(items, it)
+	}
+	return dedupeItems(items), nil
+}
+
+// codexHooksState reports the codex features.hooks flag: "on", "off" or "n/a"
+// (anything unreadable maps to "n/a" so installs are never blocked).
+func codexHooksState() string {
+	out, err := core("_codex_hooks")
+	if err != nil {
+		return "n/a"
+	}
+	state := ""
+	for _, ln := range strings.Split(out, "\n") {
+		if s := strings.TrimSpace(ln); s != "" {
+			state = s
+		}
+	}
+	if state != "on" && state != "off" {
+		return "n/a"
+	}
+	return state
+}
+
+func hasFlag(flags, f string) bool {
+	for _, x := range strings.Split(flags, ",") {
+		if x == f {
+			return true
+		}
+	}
+	return false
+}
+
+func suffixNote(desc, note string) string {
+	if desc == "" {
+		return "· " + note
+	}
+	return desc + " · " + note
 }
 
 // parseTabbed turns "a<TAB>b" lines into items (id=title=col1, desc=col2).
