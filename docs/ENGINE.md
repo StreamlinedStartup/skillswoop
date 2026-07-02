@@ -42,7 +42,7 @@ swoop-core <subcommand> [args] # non-interactive, driven by the TUI or CLI
 | `_sources` | `_sources` | Machine-readable: print saved sources. (Engine has it; TUI reads the file directly instead.) |
 | `_projects` | `_projects` | Machine-readable: print known project dirs. (Engine has it; TUI reads the file directly instead.) |
 | `_mkts` | `_mkts` | Machine-readable: dump the marketplaces file. (Engine has it; TUI reads the file directly instead.) |
-| `_plugins` | `_plugins <source>` | Machine-readable: print an `@marketplace<TAB>claude_name<TAB>codex_name` header, then `name<TAB>desc<TAB>flags` per plugin (flags: `claude,codex,hooks,mcp,commands,agents,skills`). Used by the TUI. |
+| `_plugins` | `_plugins <source>` | Machine-readable: print an `@marketplace<TAB>claude_name<TAB>codex_name` header, then `name<TAB>desc<TAB>flags<TAB>relpath` per plugin (flags: `claude,codex,hooks,mcp,commands,agents,skills`; relpath = repo-local plugin dir, empty for external sources). Used by the TUI. |
 | `_plugins_installed` | `_plugins_installed` | Machine-readable: merge `claude plugin list --json` + `codex plugin list --json` into `name@marketplace<TAB>agents<TAB>desc`. Tolerates either CLI missing (warns on stderr). |
 | `_codex_hooks` | `_codex_hooks` | Machine-readable: print the codex `features.hooks` state — `on`, `off`, or `n/a`. Any parse failure is `n/a`; it never blocks installs. |
 
@@ -201,11 +201,15 @@ A marketplace repo can carry two manifest formats:
 
 `mkt add` reads both (via the inline `NODE_PLUGINS` parser on a shallow clone or local path), registers the repo with each agent whose format exists, and warns clearly about the ones it skipped. The `name` field from each manifest is cached in the `marketplaces` file so later installs/removals know what name each CLI registered.
 
-**Scope mapping** on `plugin install`: swoop's project scope (default) becomes `claude plugin install <p>@<mkt> --scope project`; `-g` becomes `--scope user`. Codex has no project scope — `codex plugin add <p>@<mkt>` is always user-wide, and the engine prints a note when installing in project mode.
+**Scope mapping** on `plugin install`:
+
+- **Claude Code**: project scope (default) → `claude plugin install <p>@<mkt> --scope project`; `-g` → `--scope user`.
+- **Codex, `-g`**: `codex plugin add <p>@<mkt>` (user-wide, via the registered marketplace).
+- **Codex, project scope**: the plugin is **vendored into the repo** — its source directory is copied to `./plugins/<name>/` and registered in `./.agents/plugins/marketplace.json` (`"source": {"source":"local","path":"./plugins/<name>"}`), which Codex auto-discovers when running inside the project. Installing/enabling remains a Codex action: the engine prints reminders to open `/plugins` inside Codex (and `/hooks` to trust bundled hooks). Vendoring requires the plugin's source to live inside the marketplace repo; external-repo plugin sources get a warning suggesting `-g`. `plugin remove` in project scope deletes `./plugins/<name>` and drops its marketplace entry.
 
 **Codex hooks**: before installing a hook-flagged plugin for codex, if `_codex_hooks` reports `off` the engine asks to run `codex features enable hooks` (auto-yes under `SWOOP_ASSUME_YES`; suppressed entirely by `--no-hooks-enable`). Declining continues the install with a warning that the plugin's hooks won't run.
 
-**Hooks/mcp detection caveat**: component flags are exact for plugins whose `source` is a relative path inside the marketplace repo (the engine inspects the directory for `hooks/hooks.json`, `.mcp.json`, `commands/`, `agents/`, `skills/` and the plugin.json keys). For plugins hosted in *external* repos, only what the marketplace entry itself declares is badged — no second clone is made.
+**Hooks/mcp detection caveat**: component flags are exact for plugins whose `source` is a repo-local path — string form (`"./plugins/x"`) or object form (`{"source":"local","path":"./plugins/x"}`) — where the engine inspects the directory for `hooks/hooks.json`, `.mcp.json`, `commands/`, `agents/`, `skills/` and the plugin manifest keys (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, or `plugin.json`). For plugins hosted in *external* repos, only what the marketplace entry itself declares is badged — no second clone is made.
 
 ## TUI integration
 

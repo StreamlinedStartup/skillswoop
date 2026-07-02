@@ -84,8 +84,9 @@ func TestEnginePluginsLocalMarketplace(t *testing.T) {
 	if !strings.Contains(out, "@marketplace\ttest-mkt\ttest-mkt-codex") {
 		t.Fatalf("_plugins output missing marketplace header:\n%s", out)
 	}
-	if !strings.Contains(out, "hooky\tA plugin with hooks and mcp.\tclaude,codex,hooks,mcp") {
-		t.Fatalf("_plugins output missing hooky flags:\n%s", out)
+	// skills flag comes from the .codex-plugin/plugin.json manifest declaration
+	if !strings.Contains(out, "hooky\tA plugin with hooks and mcp.\tclaude,codex,hooks,mcp,skills\tplugins/hooky") {
+		t.Fatalf("_plugins output missing hooky flags/relpath:\n%s", out)
 	}
 
 	if out, err = run("mkt", "add", mkt); err != nil {
@@ -107,7 +108,8 @@ func TestEnginePluginsLocalMarketplace(t *testing.T) {
 		t.Fatalf("_mkts missing cached names:\n%s", out)
 	}
 
-	// hook-bearing plugin + codex hooks off ⇒ engine auto-enables (SWOOP_ASSUME_YES)
+	// project scope: claude installs with --scope project; codex hooks auto-enable
+	// (SWOOP_ASSUME_YES) and the plugin is vendored into the repo, not codex-added
 	out, err = run("plugin", "install", mkt, "hooky")
 	if err != nil {
 		t.Fatalf("plugin install failed: %v\n%s", err, out)
@@ -115,13 +117,17 @@ func TestEnginePluginsLocalMarketplace(t *testing.T) {
 	for _, want := range []string{
 		"[dry-run] claude plugin install hooky@test-mkt --scope project",
 		"[dry-run] codex features enable hooks",
-		"[dry-run] codex plugin add hooky@test-mkt-codex",
+		"[dry-run] vendor plugins/hooky -> ./plugins/hooky",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("plugin install output missing %q:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "codex plugin add") {
+		t.Fatalf("project scope must vendor, not codex plugin add:\n%s", out)
+	}
 	// --no-hooks-enable suppresses the features toggle; -g maps to --scope user
+	// and installs user-wide via codex plugin add
 	out, err = run("-g", "plugin", "install", mkt, "hooky", "--no-hooks-enable")
 	if err != nil {
 		t.Fatalf("plugin install --no-hooks-enable failed: %v\n%s", err, out)
@@ -129,8 +135,82 @@ func TestEnginePluginsLocalMarketplace(t *testing.T) {
 	if strings.Contains(out, "features enable hooks") {
 		t.Fatalf("--no-hooks-enable still enabled hooks:\n%s", out)
 	}
-	if !strings.Contains(out, "[dry-run] claude plugin install hooky@test-mkt --scope user") {
-		t.Fatalf("-g did not map to --scope user:\n%s", out)
+	for _, want := range []string{
+		"[dry-run] claude plugin install hooky@test-mkt --scope user",
+		"[dry-run] codex plugin add hooky@test-mkt-codex",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("-g install output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestEngineCodexProjectInstallVendorsPlugin(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required by the engine plugin walker")
+	}
+	root := t.TempDir()
+	mkt := filepath.Join(root, "mkt")
+	writeMarketplace(t, mkt)
+	proj := filepath.Join(root, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := writeStubCLIs(t, root)
+	engine, err := filepath.Abs("engine/swoop-core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("bash", append([]string{engine}, args...)...)
+		cmd.Dir = proj // live file ops must land in the project dir
+		cmd.Env = append(os.Environ(),
+			"XDG_CONFIG_HOME="+filepath.Join(root, "config"),
+			"XDG_DATA_HOME="+filepath.Join(root, "data"),
+			"NO_COLOR=1",
+			"SWOOP_ASSUME_YES=1",
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	if out, err := run("mkt", "add", mkt); err != nil {
+		t.Fatalf("mkt add failed: %v\n%s", err, out)
+	}
+	out, err := run("plugin", "install", mkt, "hooky")
+	if err != nil {
+		t.Fatalf("plugin install failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(proj, "plugins", "hooky", "hooks", "hooks.json")); err != nil {
+		t.Fatalf("vendored hooks.json missing: %v\n%s", err, out)
+	}
+	mj, err := os.ReadFile(filepath.Join(proj, ".agents", "plugins", "marketplace.json"))
+	if err != nil {
+		t.Fatalf("repo marketplace.json missing: %v\n%s", err, out)
+	}
+	for _, want := range []string{`"hooky"`, `"./plugins/hooky"`, `"local"`} {
+		if !strings.Contains(string(mj), want) {
+			t.Fatalf("marketplace.json missing %s:\n%s", want, mj)
+		}
+	}
+	if !strings.Contains(out, "/plugins") || !strings.Contains(out, "/hooks") {
+		t.Fatalf("expected /plugins install and /hooks trust guidance:\n%s", out)
+	}
+
+	// removal un-vendors the plugin and drops its marketplace entry
+	if out, err = run("plugin", "remove", "hooky"); err != nil {
+		t.Fatalf("plugin remove failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(proj, "plugins", "hooky")); !os.IsNotExist(err) {
+		t.Fatalf("vendored plugin dir still present after remove\n%s", out)
+	}
+	mj, err = os.ReadFile(filepath.Join(proj, ".agents", "plugins", "marketplace.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(mj), `"hooky"`) {
+		t.Fatalf("marketplace.json still lists hooky after remove:\n%s", mj)
 	}
 }
 
@@ -233,10 +313,12 @@ func writeMarketplace(t *testing.T, mkt string) {
 }`)
 	writeJSONFile(t, filepath.Join(mkt, ".agents", "plugins", "marketplace.json"), `{
   "name": "test-mkt-codex",
-  "plugins": [ { "name": "hooky", "source": "./plugins/hooky", "description": "A plugin with hooks and mcp." } ]
+  "plugins": [ { "name": "hooky", "source": { "source": "local", "path": "./plugins/hooky" }, "description": "A plugin with hooks and mcp." } ]
 }`)
 	writeJSONFile(t, filepath.Join(mkt, "plugins", "hooky", "hooks", "hooks.json"), `{}`)
 	writeJSONFile(t, filepath.Join(mkt, "plugins", "hooky", ".mcp.json"), `{}`)
+	writeJSONFile(t, filepath.Join(mkt, "plugins", "hooky", ".codex-plugin", "plugin.json"),
+		`{"name":"hooky","version":"1.0.0","skills":"./skills/","hooks":"./hooks/hooks.json"}`)
 	writeJSONFile(t, filepath.Join(mkt, "plugins", "plain", "plugin.json"), `{"name":"plain"}`)
 }
 

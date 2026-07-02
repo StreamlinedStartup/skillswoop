@@ -393,10 +393,13 @@ fetch(url).then(r => r.json()).then(d => {
 
 # node: read both plugin-marketplace manifests in a checkout and print
 #   @marketplace<TAB>claude_name<TAB>codex_name
-#   name<TAB>desc<TAB>flags        (flags: claude,codex,hooks,mcp,commands,agents,skills)
-# Plugins are deduped by name across formats (flags unioned). Component badges are
-# exact for relative-path plugin sources (we inspect the dir) and best-effort for
-# external-repo sources (only what the marketplace entry declares — no second clone).
+#   name<TAB>desc<TAB>flags<TAB>relpath
+# flags: claude,codex,hooks,mcp,commands,agents,skills. relpath is the plugin dir
+# relative to the checkout root when its source is repo-local ("" for external repos)
+# — used to vendor codex plugins into a project. Plugins are deduped by name across
+# formats (flags unioned). Component badges are exact for repo-local plugin sources
+# (we inspect the dir) and best-effort for external-repo sources (only what the
+# marketplace entry declares — no second clone).
 NODE_PLUGINS='
 const fs=require("fs"),path=require("path");
 const root=process.argv[1];
@@ -423,7 +426,9 @@ function compFlags(dir,entry){
     if(has("commands")) flags.add("commands");
     if(has("agents")) flags.add("agents");
     if(has("skills")) flags.add("skills");
-    const pj=readJSON(path.join(dir,".claude-plugin/plugin.json"))||readJSON(path.join(dir,"plugin.json"));
+    const pj=readJSON(path.join(dir,".claude-plugin/plugin.json"))
+      ||readJSON(path.join(dir,".codex-plugin/plugin.json"))
+      ||readJSON(path.join(dir,"plugin.json"));
     if(pj){
       if(pj.hooks) flags.add("hooks");
       if(pj.mcpServers) flags.add("mcp");
@@ -448,10 +453,14 @@ for(const m of manifests){
   names[m.agent]=typeof mj.name==="string"?mj.name:"";
   for(const p of (Array.isArray(mj.plugins)?mj.plugins:[])){
     if(!p||typeof p.name!=="string"||!p.name) continue;
-    const fl=compFlags(localDir(p.source),p);
+    const sp=typeof p.source==="string"?p.source
+      :(p.source&&typeof p.source.path==="string"?p.source.path:"");
+    const dir=localDir(sp);
+    const fl=compFlags(dir,p);
     fl.add(m.agent);
-    const cur=plugins.get(p.name)||{desc:"",flags:new Set()};
+    const cur=plugins.get(p.name)||{desc:"",flags:new Set(),rel:""};
     if(!cur.desc&&p.description) cur.desc=String(p.description).replace(/\s+/g," ").trim();
+    if(!cur.rel&&dir) cur.rel=path.relative(root,dir);
     for(const f of fl) cur.flags.add(f);
     plugins.set(p.name,cur);
   }
@@ -461,7 +470,7 @@ process.stdout.write("@marketplace\t"+names.claude+"\t"+names.codex+"\n");
 const order=["claude","codex","hooks","mcp","commands","agents","skills"];
 for(const [name,info] of plugins){
   let desc=info.desc; if(desc.length>100) desc=desc.slice(0,99)+"…";
-  process.stdout.write(name+"\t"+desc+"\t"+order.filter(f=>info.flags.has(f)).join(",")+"\n");
+  process.stdout.write(name+"\t"+desc+"\t"+order.filter(f=>info.flags.has(f)).join(",")+"\t"+info.rel+"\n");
 }
 '
 
@@ -527,6 +536,55 @@ plugins_installed() {
   node -e "$NODE_PLUGINS_INSTALLED" "$cf" "$xf"
   [ -n "$cf" ] && rm -f "$cf"; [ -n "$xf" ] && rm -f "$xf"
   return 0
+}
+
+# node: add/remove a plugin entry in a repo-local marketplace.json
+# (codex auto-discovers <repo>/.agents/plugins/marketplace.json)
+# argv: mode(add|remove)  file  name  relpath  desc
+NODE_MKT_LOCAL='
+const fs=require("fs"),path=require("path");
+const [mode,file,name,rel,desc]=process.argv.slice(1);
+let mj=null;
+try{mj=JSON.parse(fs.readFileSync(file,"utf8"));}catch{}
+if(typeof mj!=="object"||mj===null||Array.isArray(mj)) mj=null;
+if(!mj) mj={name:(path.basename(process.cwd())||"local")+"-plugins",plugins:[]};
+if(!Array.isArray(mj.plugins)) mj.plugins=[];
+if(mode==="add"){
+  const entry={name:name,source:{source:"local",path:rel}};
+  if(desc) entry.description=desc;
+  const i=mj.plugins.findIndex(p=>p&&p.name===name);
+  if(i>=0) mj.plugins[i]=Object.assign({},mj.plugins[i],entry);
+  else mj.plugins.push(entry);
+}else{
+  mj.plugins=mj.plugins.filter(p=>!(p&&p.name===name));
+}
+fs.mkdirSync(path.dirname(file),{recursive:true});
+fs.writeFileSync(file,JSON.stringify(mj,null,2)+"\n");
+'
+
+# vendor a codex plugin into the current project: copy its source dir to
+# ./plugins/<name> and register it in ./.agents/plugins/marketplace.json,
+# which codex auto-discovers. Install/enable stays a Codex action (/plugins).
+vendor_codex_plugin() {  # $1 checkout dir  $2 plugin  $3 relpath in checkout  $4 desc
+  local ck="$1" p="$2" rel="$3" desc="${4:-}"
+  if [ -z "$ck" ]; then
+    printf '%swarn:%s no marketplace checkout — cannot vendor %s for codex\n' "$YLW" "$RST" "$p" >&2
+    return 1
+  fi
+  if [ -z "$rel" ] || [ ! -d "$ck/$rel" ]; then
+    printf '%swarn:%s %s lives in an external repo — cannot vendor it into this project (use -g for a user-wide codex install)\n' "$YLW" "$RST" "$p" >&2
+    return 1
+  fi
+  if [ -n "$DRYRUN" ]; then
+    printf '%s[dry-run]%s vendor %s -> ./plugins/%s + register in ./.agents/plugins/marketplace.json\n' "$YLW" "$RST" "$rel" "$p"
+    return 0
+  fi
+  mkdir -p plugins
+  rm -rf "plugins/$p"
+  cp -R "$ck/$rel" "plugins/$p"
+  node -e "$NODE_MKT_LOCAL" add ".agents/plugins/marketplace.json" "$p" "./plugins/$p" "$desc" || return 1
+  printf '  %svendored%s %s -> ./plugins/%s %s(repo-local codex plugin)%s\n' "$GRN" "$RST" "$p" "$p" "$DIM" "$RST"
+  printf '  %snext: open /plugins inside Codex to install & enable it%s\n' "$DIM" "$RST"
 }
 
 # codex features.hooks state: prints on/off/n-a ("n/a" never blocks installs)
@@ -861,10 +919,25 @@ plugin_install() {
   local cn xn
   cn="$(printf '%s\n' "$line" | cut -f2)"
   xn="$(printf '%s\n' "$line" | cut -f3)"
-  local plist; plist="$(list_plugins_in "$src" 2>"$ERRTO" || true)"   # for hooks badges
-  local p a flags ok=0 hooks_prompted=0
+  local plist; plist="$(list_plugins_in "$src" 2>"$ERRTO" || true)"   # hooks badges + vendor paths
+  # project-scope codex installs vendor plugin source into the repo — keep a checkout around
+  local ck="" ckrm=0
+  if [ "$SCOPE" != global ] && [ -n "$xn" ]; then
+    case " $(load_agents | tr '\n' ' ') " in *" codex "*)
+      if is_local "$src"; then
+        ck="$(resolve_local "$src" 2>/dev/null)" || ck=""
+      elif ck="$(mktmpd)" && clone_source "$src" "$ck"; then
+        ckrm=1
+      else
+        rm -rf "$ck" 2>/dev/null || :; ck=""
+      fi ;;
+    esac
+  fi
+  local p a flags rel pdesc ok=0 hooks_prompted=0
   for p in "$@"; do
     flags="$(printf '%s\n' "$plist" | awk -F '\t' -v p="$p" '$1==p{print $3; exit}')"
+    rel="$(printf '%s\n' "$plist" | awk -F '\t' -v p="$p" '$1==p{print $4; exit}')"
+    pdesc="$(printf '%s\n' "$plist" | awk -F '\t' -v p="$p" '$1==p{print $2; exit}')"
     for a in $(load_agents); do
       case "$a" in
         claude-code)
@@ -880,7 +953,6 @@ plugin_install() {
             printf '%swarn:%s skipped codex for %s — marketplace has no Codex format\n' "$YLW" "$RST" "$p"
             continue
           fi
-          [ "$SCOPE" = global ] || printf '%snote:%s codex plugins install user-wide (codex has no project scope)\n' "$DIM" "$RST"
           case ",$flags," in *,hooks,*)
             if [ "$hooks_prompted" = 0 ] && [ -z "$NO_HOOKS_ENABLE" ] && [ "$(codex_hooks_state)" = off ]; then
               hooks_prompted=1
@@ -892,20 +964,44 @@ plugin_install() {
               fi
             fi ;;
           esac
-          if run_skills codex plugin add "$p@$xn"; then ok=1
-          else printf '%swarn:%s codex install failed for %s\n' "$YLW" "$RST" "$p" >&2; fi ;;
+          if [ "$SCOPE" = global ]; then
+            if run_skills codex plugin add "$p@$xn"; then ok=1
+            else printf '%swarn:%s codex install failed for %s\n' "$YLW" "$RST" "$p" >&2; fi
+          elif vendor_codex_plugin "$ck" "$p" "$rel" "$pdesc"; then
+            ok=1
+            case ",$flags," in *,hooks,*)
+              printf '  %snext: run /hooks inside Codex to review & trust this plugin'\''s hooks%s\n' "$DIM" "$RST" ;;
+            esac
+          fi ;;
         *) printf '%swarn:%s skipped %s — plugins are not supported for it\n' "$YLW" "$RST" "$a" ;;
       esac
     done
   done
+  if [ "$ckrm" = 1 ]; then rm -rf "$ck"; fi
   [ "$ok" = 1 ] || { printf '%serror:%s no plugin installed for any agent\n' "$RED" "$RST" >&2; return 1; }
   return 0
 }
 
 plugin_remove() {
   [ "$#" -ge 1 ] || die "usage: swoop plugin remove <plugin[@marketplace]>..."
-  local p ok=0
+  local p base ok=0
   for p in "$@"; do
+    # project scope: also remove a plugin vendored into this repo for codex
+    base="${p%%@*}"
+    if [ "$SCOPE" != global ] && [ -n "$base" ] && [ -d "plugins/$base" ]; then
+      if [ -n "$DRYRUN" ]; then
+        printf '%s[dry-run]%s remove ./plugins/%s + its ./.agents/plugins/marketplace.json entry\n' "$YLW" "$RST" "$base"
+        ok=1
+      else
+        rm -rf "plugins/$base"
+        if [ -f .agents/plugins/marketplace.json ]; then
+          node -e "$NODE_MKT_LOCAL" remove ".agents/plugins/marketplace.json" "$base" "" "" \
+            || printf '%swarn:%s could not update ./.agents/plugins/marketplace.json\n' "$YLW" "$RST" >&2
+        fi
+        printf '  removed vendored ./plugins/%s\n' "$base"
+        ok=1
+      fi
+    fi
     if have claude; then
       if run_skills claude plugin uninstall "$p"; then ok=1
       else printf '%swarn:%s claude uninstall failed for %s\n' "$YLW" "$RST" "$p" >&2; fi
