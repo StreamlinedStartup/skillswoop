@@ -71,8 +71,21 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # macOS TMPDIR ends with a slash — strip it, or temp paths grow a "//" that breaks
 # prefix comparisons downstream (e.g. the NODE_PLUGINS containment check).
 _tmpbase() { local t="${TMPDIR:-/tmp}"; printf '%s' "${t%/}"; }
-mktmp()  { mktemp     "$(_tmpbase)/swoop.XXXXXXXX"; }
-mktmpd() { mktemp -d  "$(_tmpbase)/swoop.XXXXXXXX"; }
+# All scratch lives under one per-process root that a trap removes on the way
+# out, signals included. The per-path `rm -rf` calls dotted through the script
+# only run on normal completion, so quitting the TUI mid-clone used to strand
+# the whole checkout in TMPDIR (two abandoned remotion clones = 2.4GB) until a
+# reboot. A root (rather than a list of paths) is what makes this work at all:
+# mktmp is called as $(mktmp), and a subshell cannot append to a parent array.
+TMPROOT="$(mktemp -d "$(_tmpbase)/swoop.XXXXXXXX")" || die "cannot create a temp dir under $(_tmpbase)"
+# INT/TERM/HUP re-raise after cleaning so the exit status still reads as a signal
+# death; bash runs the EXIT trap on the way out either way.
+trap 'rm -rf "$TMPROOT" 2>/dev/null' EXIT
+trap 'rm -rf "$TMPROOT" 2>/dev/null; trap - INT;  kill -INT  $$' INT
+trap 'rm -rf "$TMPROOT" 2>/dev/null; trap - TERM; kill -TERM $$' TERM
+trap 'rm -rf "$TMPROOT" 2>/dev/null; trap - HUP;  kill -HUP  $$' HUP
+mktmp()  { mktemp     "$TMPROOT/x.XXXXXXXX"; }
+mktmpd() { mktemp -d  "$TMPROOT/x.XXXXXXXX"; }
 tty_ok()   { { true </dev/tty; } 2>/dev/null; }
 read_tty() { if tty_ok; then IFS= read -r "$1" </dev/tty; else IFS= read -r "$1"; fi; }
 
