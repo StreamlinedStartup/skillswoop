@@ -262,6 +262,31 @@ clone_source() {  # $1 source  $2 tmpdir
   return 1
 }
 
+# clone only the files matching a pattern, skipping every other blob. A plain
+# --depth 1 clone of a big monorepo is pathological — remotion is 1.2GB and over
+# four minutes, which reads as a hung spinner. Blobless + --no-checkout defers
+# all content, then sparse-checkout pulls just the matches (remotion: 3MB, 6s).
+clone_matching() {  # $1 source  $2 tmpdir  $3.. gitignore-style patterns
+  local src="$1" tmp="$2"; shift 2
+  local slug; slug="$(gh_slug "$src")" || return 1
+  local branch=""; case "$slug" in *\#*) branch="${slug#*#}"; slug="${slug%#*}" ;; esac
+  local -a flags=( --depth 1 --filter=blob:none --no-checkout --quiet )
+  [ -n "$branch" ] && flags+=( --branch "$branch" )
+  local cloned=""
+  if have gh; then
+    gh repo clone "$slug" "$tmp" -- "${flags[@]}" 2>"$ERRTO" && cloned=1
+  fi
+  if [ -z "$cloned" ] && have git; then
+    git clone "${flags[@]}" "https://github.com/$slug.git" "$tmp" 2>"$ERRTO" && cloned=1
+  fi
+  [ -n "$cloned" ] || return 1
+  # --no-cone so the pattern can match at any depth; the checkout lazily fetches
+  # only the blobs it needs over the same authenticated remote the clone used.
+  git -C "$tmp" sparse-checkout set --no-cone "$@" 2>"$ERRTO" || return 1
+  git -C "$tmp" checkout --quiet 2>"$ERRTO" || return 1
+  return 0
+}
+
 # node: walk a directory, print "name<TAB>description" for each SKILL.md found
 NODE_WALK='
 const fs=require("fs"),path=require("path");
@@ -335,9 +360,10 @@ list_skills_in() {
   local slug; slug="$(gh_slug "$src")" || return 1
   local branch=""; case "$slug" in *\#*) branch="${slug#*#}"; slug="${slug%#*}" ;; esac
 
-  # primary: shallow clone (fast, single op; gh handles private repos, git covers public)
+  # primary: clone the SKILL.md files alone (gh handles private repos, git covers
+  # public). Listing only ever reads frontmatter, so the rest of the tree is waste.
   local tmp; tmp="$(mktmpd)" || return 1
-  if clone_source "$src" "$tmp"; then
+  if clone_matching "$src" "$tmp" '**/SKILL.md' '**/skill.md'; then
     node -e "$NODE_WALK" "$tmp"; local rc=$?
     rm -rf "$tmp"; return $rc
   fi
