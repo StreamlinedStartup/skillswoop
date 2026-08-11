@@ -25,6 +25,9 @@ func TestMenuDisclosesOnlySelectedDescription(t *testing.T) {
 	if !strings.Contains(view, "SKILLS") || !strings.Contains(view, "PLUGINS") || !strings.Contains(view, "SETTINGS") {
 		t.Fatal("domain tabs are missing")
 	}
+	if got := strings.Count(view, "SKILLS"); got != 1 {
+		t.Fatalf("active domain label appears %d times, want 1", got)
+	}
 }
 
 func TestScreenInstructionsLiveInContextualHelp(t *testing.T) {

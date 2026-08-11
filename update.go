@@ -30,9 +30,9 @@ func (m *model) layout() {
 		m.pick.setSize(m.innerW, listH)
 	}
 	if m.menu != nil {
-		menuH := m.innerH - 7
+		menuH := m.innerH - 5
 		if m.innerH < 12 {
-			menuH = m.innerH - 3
+			menuH = m.innerH - 2
 		}
 		m.menu.setSize(m.innerW, menuH)
 	}

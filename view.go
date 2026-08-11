@@ -157,7 +157,7 @@ func (m *model) menuBody() string {
 	if compact {
 		separator = "\n"
 	}
-	return m.domainTabs() + separator + m.disclosureBody(domain.label, "", m.menu, desc, compact)
+	return m.domainTabs() + separator + m.disclosureBody("", "", m.menu, desc, compact)
 }
 
 func (m *model) sourceActionsBody() string {
@@ -171,11 +171,19 @@ func (m *model) sourceActionsBody() string {
 
 func (m *model) disclosureBody(label, sub string, p *picker, desc string, compact bool) string {
 	desc = truncate(desc, m.innerW)
+	prefix := ""
+	if label != "" {
+		if compact {
+			prefix = heading(label, "") + "\n"
+		} else {
+			prefix = heading(label, sub) + "\n\n"
+		}
+	}
 	if compact {
-		return heading(label, "") + "\n" + p.view() + "\n" + rowDescCur.Render(desc)
+		return prefix + p.view() + "\n" + rowDescCur.Render(desc)
 	}
 	rule := rowDesc.Render(strings.Repeat("─", m.innerW))
-	return heading(label, sub) + "\n\n" + p.view() + "\n\n" + rule + "\n" + rowDescCur.Render(desc)
+	return prefix + p.view() + "\n\n" + rule + "\n" + rowDescCur.Render(desc)
 }
 
 func (m *model) domainTabs() string {
