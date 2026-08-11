@@ -204,7 +204,7 @@ func (m *model) beginInstall(kind installKind, source string) tea.Cmd {
 	}
 	m.install = &installRequest{
 		kind:   kind,
-		items:  append([]item(nil), sel...),
+		items:  sel,
 		source: source,
 		origin: m.screen,
 	}
@@ -213,7 +213,7 @@ func (m *model) beginInstall(kind installKind, source string) tea.Cmd {
 }
 
 func (m *model) executeInstall(req installRequest) tea.Cmd {
-	m.busyTitle = installBusyTitle(req)
+	m.busyTitle = "installing " + installTitle(req)
 	m.screen = scRunning
 
 	if req.kind == installPlugins {
@@ -227,9 +227,9 @@ func (m *model) executeInstall(req installRequest) tea.Cmd {
 	}
 
 	if req.origin == scStarred {
-		return installGroupedCmd(installResultTitle(req), req.global, req.items)
+		return installGroupedCmd("install "+installTitle(req), req.global, req.items)
 	}
-	return opCmd(installResultTitle(req), installArgs(req)...)
+	return opCmd("install "+installTitle(req), installArgs(req)...)
 }
 
 func (m *model) runPluginInstall(req installRequest, denyHooks bool) tea.Cmd {
@@ -237,9 +237,9 @@ func (m *model) runPluginInstall(req installRequest, denyHooks bool) tea.Cmd {
 	if denyHooks {
 		args = hooksDenyArgs(args)
 	}
-	m.busyTitle = installBusyTitle(req)
+	m.busyTitle = "installing " + installTitle(req)
 	m.screen = scRunning
-	return opCmd(installResultTitle(req), args...)
+	return opCmd("install "+installTitle(req), args...)
 }
 
 func installArgs(req installRequest) []string {
@@ -271,15 +271,7 @@ func installNeedsHooks(req installRequest) bool {
 	return false
 }
 
-func installBusyTitle(req installRequest) string {
-	return "installing " + installTitleSuffix(req)
-}
-
-func installResultTitle(req installRequest) string {
-	return "install " + installTitleSuffix(req)
-}
-
-func installTitleSuffix(req installRequest) string {
+func installTitle(req installRequest) string {
 	destination := "in this project"
 	if req.global {
 		destination = "globally"

@@ -129,6 +129,11 @@ type flashMsg string
 type clearFlashMsg struct{}
 
 func newModel() *model {
+	projectDir, err := os.Getwd()
+	if err != nil {
+		projectDir = "current directory unavailable"
+	}
+
 	sp := spinner.New()
 	sp.Spinner = spinner.Spinner{
 		Frames: []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
@@ -148,20 +153,12 @@ func newModel() *model {
 		spin:       sp,
 		input:      ti,
 		agents:     loadAgents(),
-		projectDir: currentProjectDir(),
+		projectDir: projectDir,
 	}
 	m.domains = menuDomains()
 	m.domainCursors = make([]int, len(m.domains))
 	m.setDomain(0)
 	return m
-}
-
-func currentProjectDir() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "current directory unavailable"
-	}
-	return dir
 }
 
 func (m *model) Init() tea.Cmd { return m.spin.Tick }

@@ -321,32 +321,25 @@ func (m *model) installDestinationBody() string {
 		return heading("INSTALL", "destination unavailable")
 	}
 	req := *m.install
-	if m.innerH < 14 {
-		return m.compactInstallDestinationBody(req)
+	compact := m.innerH < 14
+	agents := strings.ReplaceAll(m.agents, " ", " and ")
+	globalDescription := "Every project for " + agents
+	if !compact {
+		globalDescription = "Available in every project for " + agents
 	}
 	lines := []string{heading(installHeading(req), "")}
-	if req.source != "" {
+	if !compact && req.source != "" {
 		lines = append(lines, "", rowDesc.Render("From ")+rowCursor.Render(short(req.source)))
 	}
-	lines = append(lines,
-		"",
-		rowDesc.Render("Selected"),
-		rowCursor.Render(truncate(selectionSummary(req), m.innerW)),
-		"",
-		rowDescCur.Render(truncate(installQuestion(req), m.innerW)),
-		"",
-		destinationRow(!req.global, "This project"),
-		rowDesc.Render("    "+truncate("Only in "+m.projectDir, m.innerW-4)),
-		"",
-		destinationRow(req.global, "Globally"),
-		rowDesc.Render("    "+truncate("Available in every project for "+strings.ReplaceAll(m.agents, " ", " and "), m.innerW-4)),
-	)
-	return strings.Join(lines, "\n")
-}
-
-func (m *model) compactInstallDestinationBody(req installRequest) string {
-	lines := []string{heading(installHeading(req), "")}
-	if m.innerH >= 7 {
+	if !compact {
+		lines = append(lines,
+			"",
+			rowDesc.Render("Selected")+"\n"+
+				rowCursor.Render(truncate(selectionSummary(req), m.innerW))+"\n\n"+
+				rowDescCur.Render(truncate(installQuestion(req), m.innerW)),
+			"",
+		)
+	} else if m.innerH >= 7 {
 		lines = append(lines,
 			rowDesc.Render("Selected ")+rowCursor.Render(truncate(selectionSummary(req), m.innerW-9)),
 			rowDescCur.Render(truncate(installQuestion(req), m.innerW)),
@@ -355,8 +348,13 @@ func (m *model) compactInstallDestinationBody(req installRequest) string {
 	lines = append(lines,
 		destinationRow(!req.global, "This project"),
 		rowDesc.Render("    "+truncate("Only in "+m.projectDir, m.innerW-4)),
+	)
+	if !compact {
+		lines = append(lines, "")
+	}
+	lines = append(lines,
 		destinationRow(req.global, "Globally"),
-		rowDesc.Render("    "+truncate("Every project for "+strings.ReplaceAll(m.agents, " ", " and "), m.innerW-4)),
+		rowDesc.Render("    "+truncate(globalDescription, m.innerW-4)),
 	)
 	return strings.Join(lines, "\n")
 }

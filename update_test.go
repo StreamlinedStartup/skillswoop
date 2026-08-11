@@ -300,8 +300,8 @@ func TestHookPluginRequestRetainsDestinationThroughCheck(t *testing.T) {
 	if m.pendingInstall == nil || !m.pendingInstall.global {
 		t.Fatalf("pending install lost destination: %#v", m.pendingInstall)
 	}
-	if got, want := installResultTitle(*m.pendingInstall), "install 1 plugin globally"; got != want {
-		t.Fatalf("result title = %q, want %q", got, want)
+	if got, want := installTitle(*m.pendingInstall), "1 plugin globally"; got != want {
+		t.Fatalf("install title = %q, want %q", got, want)
 	}
 }
 
