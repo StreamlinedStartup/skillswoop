@@ -141,33 +141,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case codexHooksMsg:
-		args := m.pendingInstall
+		req := m.pendingInstall
 		m.pendingInstall = nil
-		if len(args) == 0 {
+		if req == nil {
 			m.screen = scMenu
 			return m, nil
 		}
 		if msg.state == "off" {
-			m.prev = scPlugins
+			m.prev = req.origin
 			m.screen = scConfirm
 			m.confirmMsg = "Enable Codex hooks (features.hooks) so these plugins' hooks run?"
 			// yes: plain install — the engine auto-enables under SWOOP_ASSUME_YES
 			m.confirmCmd = func(mm *model) tea.Cmd {
-				mm.busyTitle = "installing plugin(s)"
-				mm.screen = scRunning
-				return opCmd("install plugins", args...)
+				return mm.runPluginInstall(*req, false)
 			}
 			// no: same install, but tell the engine to leave features.hooks alone
 			m.denyCmd = func(mm *model) tea.Cmd {
-				mm.busyTitle = "installing plugin(s)"
-				mm.screen = scRunning
-				return opCmd("install plugins", hooksDenyArgs(args)...)
+				return mm.runPluginInstall(*req, true)
 			}
 			return m, nil
 		}
-		m.busyTitle = "installing plugin(s)"
-		m.screen = scRunning
-		return m, opCmd("install plugins", args...)
+		return m, m.runPluginInstall(*req, false)
 
 	case searchMsg:
 		if msg.err != nil || len(msg.items) == 0 {
@@ -332,8 +326,6 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pick.home()
 		case "end":
 			m.pick.end()
-		case "tab":
-			m.global = !m.global
 		case "ctrl+r":
 			if it, ok := m.pick.current(); ok {
 				m.renameURL = it.id
@@ -405,8 +397,6 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "a":
 			all := m.pick.visibleSelectedCount() < m.pick.len()
 			m.pick.selectAll(all)
-		case "tab":
-			m.global = !m.global
 		case "enter":
 			return m, m.installSelected()
 		}
@@ -424,8 +414,6 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pick.home()
 		case "end":
 			m.pick.end()
-		case "tab":
-			m.global = !m.global
 		case "ctrl+r":
 			if it, ok := m.pick.current(); ok {
 				m.renameURL = it.id
@@ -492,8 +480,6 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "a":
 			all := m.pick.visibleSelectedCount() < m.pick.len()
 			m.pick.selectAll(all)
-		case "tab":
-			m.global = !m.global
 		case "enter":
 			return m, m.installSelectedPlugins()
 		}
@@ -541,10 +527,28 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "a":
 			all := m.pick.visibleSelectedCount() < m.pick.len()
 			m.pick.selectAll(all)
-		case "tab":
-			m.global = !m.global
 		case "enter":
 			return m, m.installSelected()
+		}
+		return m, nil
+
+	case scInstallDestination:
+		if m.install == nil {
+			m.screen = scMenu
+			return m, nil
+		}
+		switch k {
+		case "up", "k":
+			m.install.global = false
+		case "down", "j":
+			m.install.global = true
+		case "esc":
+			m.screen = m.install.origin
+			m.install = nil
+		case "enter":
+			req := *m.install
+			m.install = nil
+			return m, m.executeInstall(req)
 		}
 		return m, nil
 

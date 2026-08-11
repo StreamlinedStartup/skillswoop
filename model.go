@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -12,23 +13,24 @@ import (
 type screen int
 
 const (
-	scMenu          screen = iota
-	scSourceActions        // source management actions
-	scSources              // install: pick a source
-	scSkills               // install: multi-select skills
-	scStarred              // install: multi-select starred skills
-	scBrowseInput          // browse: query
-	scBrowseResults        // browse: multi-select repos
-	scAdd                  // add a source
-	scAgents               // edit default agents
-	scRemove               // remove sources (multi)
-	scRename               // give a source a friendly display name
-	scConfirm              // generic yes/no
-	scRunning              // spinner while an op runs
-	scResult               // scrollable output of an op
-	scMarkets              // plugins: pick a marketplace
-	scPlugins              // plugins: multi-select plugins
-	scPluginRemove         // plugins: multi-select installed plugins to remove
+	scMenu               screen = iota
+	scSourceActions             // source management actions
+	scSources                   // install: pick a source
+	scSkills                    // install: multi-select skills
+	scStarred                   // install: multi-select starred skills
+	scBrowseInput               // browse: query
+	scBrowseResults             // browse: multi-select repos
+	scAdd                       // add a source
+	scAgents                    // edit default agents
+	scRemove                    // remove sources (multi)
+	scRename                    // give a source a friendly display name
+	scInstallDestination        // install: confirm project or global destination
+	scConfirm                   // generic yes/no
+	scRunning                   // spinner while an op runs
+	scResult                    // scrollable output of an op
+	scMarkets                   // plugins: pick a marketplace
+	scPlugins                   // plugins: multi-select plugins
+	scPluginRemove              // plugins: multi-select installed plugins to remove
 )
 
 // menu entries
@@ -42,6 +44,21 @@ type menuEntry struct {
 type menuDomain struct {
 	label   string
 	entries []menuEntry
+}
+
+type installKind int
+
+const (
+	installSkills installKind = iota
+	installPlugins
+)
+
+type installRequest struct {
+	kind   installKind
+	items  []item
+	source string
+	origin screen
+	global bool
 }
 
 type model struct {
@@ -61,14 +78,16 @@ type model struct {
 	vp            viewport.Model
 	vpReady       bool
 
-	global         bool     // scope toggle (project default)
-	curSource      string   // source being drilled into
-	curMarket      string   // marketplace being drilled into (scPlugins)
-	renameURL      string   // source whose alias is being edited (scRename)
-	filtering      bool     // true while slash-filtering repo skills/plugins
-	showHelp       bool     // contextual keyboard help overlay
-	addMarketplace bool     // scAdd doubles as the add-marketplace input
-	pendingInstall []string // plugin-install args parked while _codex_hooks runs
+	global         bool // update scope toggle (project default)
+	install        *installRequest
+	projectDir     string
+	curSource      string          // source being drilled into
+	curMarket      string          // marketplace being drilled into (scPlugins)
+	renameURL      string          // source whose alias is being edited (scRename)
+	filtering      bool            // true while slash-filtering repo skills/plugins
+	showHelp       bool            // contextual keyboard help overlay
+	addMarketplace bool            // scAdd doubles as the add-marketplace input
+	pendingInstall *installRequest // plugin request parked while _codex_hooks runs
 	busyTitle      string
 	resultTitle    string
 	resultErr      bool
@@ -125,15 +144,24 @@ func newModel() *model {
 	ti.CharLimit = 200
 
 	m := &model{
-		screen: scMenu,
-		spin:   sp,
-		input:  ti,
-		agents: loadAgents(),
+		screen:     scMenu,
+		spin:       sp,
+		input:      ti,
+		agents:     loadAgents(),
+		projectDir: currentProjectDir(),
 	}
 	m.domains = menuDomains()
 	m.domainCursors = make([]int, len(m.domains))
 	m.setDomain(0)
 	return m
+}
+
+func currentProjectDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "current directory unavailable"
+	}
+	return dir
 }
 
 func (m *model) Init() tea.Cmd { return m.spin.Tick }

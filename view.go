@@ -110,6 +110,9 @@ func (m *model) buildBody() string {
 		return heading("REMOVE plugins", "installed for configured agents") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
+	case scInstallDestination:
+		return m.installDestinationBody()
+
 	case scBrowseInput:
 		return m.inputBody("BROWSE skills.sh", "type a keyword, then ENTER")
 
@@ -249,6 +252,8 @@ func (m *model) contextLabel() string {
 		return "MARKETPLACES"
 	case scPlugins:
 		return "PLUGINS"
+	case scInstallDestination:
+		return "INSTALL DESTINATION"
 	case scPluginRemove:
 		return "REMOVE PLUGINS"
 	}
@@ -264,31 +269,33 @@ func (m *model) contextKeys() []keyHint {
 			{"← / → · h / l", "change section"},
 			move,
 			{"enter / space", "select action"},
-			{"tab", "toggle scope"},
+			{"tab", "toggle update scope"},
 			{"q", "quit"},
 		}
 	case scSourceActions:
 		return []keyHint{move, {"enter / space", "select action"}, back, {"q", "return to menu"}}
 	case scSources:
-		return []keyHint{move, {"enter", "open source"}, {"ctrl+r", "rename source"}, {"tab", "toggle scope"}, back}
+		return []keyHint{move, {"enter", "open source"}, {"ctrl+r", "rename source"}, back}
 	case scSkills:
 		if m.filtering {
 			return []keyHint{{"type", "filter skills"}, {"enter", "return to skill list"}, {"esc", "clear filter"}}
 		}
-		return []keyHint{move, {"space", "mark skill"}, {"s", "star skill"}, {"/", "filter skills"}, {"a", "mark all or none"}, {"enter", "install marked skills"}, {"tab", "toggle scope"}, back}
+		return []keyHint{move, {"space", "mark skill"}, {"s", "star skill"}, {"/", "filter skills"}, {"a", "mark all or none"}, {"enter", "choose install destination"}, back}
 	case scStarred:
-		return []keyHint{move, {"space", "mark skill"}, {"a", "mark all or none"}, {"enter", "install marked skills"}, {"tab", "toggle scope"}, back}
+		return []keyHint{move, {"space", "mark skill"}, {"a", "mark all or none"}, {"enter", "choose install destination"}, back}
 	case scBrowseResults:
 		return []keyHint{move, {"space", "mark repository"}, {"a", "mark all or none"}, {"enter", "remember marked sources"}, back}
 	case scRemove:
 		return []keyHint{move, {"space", "mark source"}, {"enter", "remove marked sources"}, back}
 	case scMarkets:
-		return []keyHint{move, {"enter", "open marketplace"}, {"ctrl+r", "rename marketplace"}, {"x", "remove marketplace"}, {"u", "update marketplaces"}, {"tab", "toggle scope"}, back}
+		return []keyHint{move, {"enter", "open marketplace"}, {"ctrl+r", "rename marketplace"}, {"x", "remove marketplace"}, {"u", "update marketplaces"}, back}
 	case scPlugins:
 		if m.filtering {
 			return []keyHint{{"type", "filter plugins"}, {"enter", "return to plugin list"}, {"esc", "clear filter"}}
 		}
-		return []keyHint{move, {"space", "mark plugin"}, {"/", "filter plugins"}, {"a", "mark all or none"}, {"enter", "install marked plugins"}, {"tab", "toggle scope"}, back}
+		return []keyHint{move, {"space", "mark plugin"}, {"/", "filter plugins"}, {"a", "mark all or none"}, {"enter", "choose install destination"}, back}
+	case scInstallDestination:
+		return []keyHint{move, {"enter", "install here"}, {"esc", "change selection"}}
 	case scPluginRemove:
 		return []keyHint{move, {"space", "mark plugin"}, {"enter", "remove marked plugins"}, back}
 	case scRename:
@@ -309,6 +316,75 @@ func (m *model) inputBody(label, sub string) string {
 	return heading(label, sub) + "\n\n" + m.input.View()
 }
 
+func (m *model) installDestinationBody() string {
+	if m.install == nil {
+		return heading("INSTALL", "destination unavailable")
+	}
+	req := *m.install
+	lines := []string{heading(installHeading(req), "")}
+	if req.source != "" {
+		lines = append(lines, "", rowDesc.Render("From ")+rowCursor.Render(short(req.source)))
+	}
+	lines = append(lines,
+		"",
+		rowDesc.Render("Selected"),
+		rowCursor.Render(truncate(selectionSummary(req), m.innerW)),
+		"",
+		rowDescCur.Render(truncate("Where should these "+installNoun(req.kind, true)+" be installed?", m.innerW)),
+		"",
+		destinationRow(!req.global, "This project"),
+		rowDesc.Render("    "+truncate("Only in "+m.projectDir, m.innerW-4)),
+		"",
+		destinationRow(req.global, "Globally"),
+		rowDesc.Render("    "+truncate("Available in every project for "+strings.ReplaceAll(m.agents, " ", " and "), m.innerW-4)),
+	)
+	return strings.Join(lines, "\n")
+}
+
+func destinationRow(active bool, label string) string {
+	marker := "  ○ "
+	style := rowNormal
+	if active {
+		marker = barStyle.Render("▌ ") + checkOn.Render("● ")
+		style = rowCursor
+	}
+	return marker + style.Render(label)
+}
+
+func installHeading(req installRequest) string {
+	return "INSTALL " + itoa(len(req.items)) + " " + strings.ToUpper(installNoun(req.kind, len(req.items) != 1))
+}
+
+func installNoun(kind installKind, plural bool) string {
+	noun := "skill"
+	if kind == installPlugins {
+		noun = "plugin"
+	}
+	if plural {
+		noun += "s"
+	}
+	return noun
+}
+
+func selectionSummary(req installRequest) string {
+	limit := len(req.items)
+	if limit > 3 {
+		limit = 3
+	}
+	names := make([]string, 0, limit+1)
+	for _, it := range req.items[:limit] {
+		name := it.id
+		if req.origin == scStarred && it.source != "" {
+			name += " (" + short(it.source) + ")"
+		}
+		names = append(names, name)
+	}
+	if remaining := len(req.items) - limit; remaining > 0 {
+		names = append(names, "+ "+itoa(remaining)+" more")
+	}
+	return strings.Join(names, ", ")
+}
+
 func (m *model) statusBar() string {
 	scope := scopeProj.Render("PROJECT")
 	if m.global {
@@ -323,7 +399,10 @@ func (m *model) statusBar() string {
 		keys = m.compactKeys()
 	}
 
-	left := keys + helpDesc.Render(" │ ") + helpDesc.Render("scope ") + scope
+	left := keys
+	if m.screen == scMenu {
+		left += helpDesc.Render(" │ ") + helpDesc.Render("update scope ") + scope
+	}
 	right := helpDesc.Render("agents ") + agents
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -358,6 +437,8 @@ func (m *model) compactKeys() string {
 			return key("type", "filter") + key("⏎", "list") + key("esc", "clear") + key("?", "keys")
 		}
 		return key("↑↓", "move") + key("space", "mark") + key("⏎", "install") + key("?", "keys")
+	case scInstallDestination:
+		return key("↑↓", "choose") + key("⏎", "install") + key("esc", "selection") + key("?", "keys")
 	case scBrowseInput, scAdd, scAgents:
 		return key("⏎", "confirm") + key("esc", "cancel") + key("?", "keys")
 	case scConfirm:

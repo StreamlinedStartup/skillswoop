@@ -78,7 +78,7 @@ func TestQuestionMarkOpensAndEscapeClosesContextualHelp(t *testing.T) {
 		t.Fatal("question mark did not open help")
 	}
 	view := stripANSI(m.View())
-	for _, want := range []string{"KEYS · SKILLS", "change section", "toggle scope", "quit"} {
+	for _, want := range []string{"KEYS · SKILLS", "change section", "toggle update scope", "quit"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("help view missing %q", want)
 		}
@@ -105,10 +105,221 @@ func TestHelpIsContextualForSkillPicker(t *testing.T) {
 
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	view := stripANSI(mm.View())
-	for _, want := range []string{"mark skill", "star skill", "filter skills", "install marked"} {
+	for _, want := range []string{"mark skill", "star skill", "filter skills", "choose install destination"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("skill help missing %q", want)
 		}
+	}
+}
+
+func TestInstallSelectionsOpenProjectDestination(t *testing.T) {
+	tests := []struct {
+		name   string
+		screen screen
+		kind   installKind
+		source string
+		item   item
+	}{
+		{name: "skills", screen: scSkills, kind: installSkills, source: "owner/skills", item: item{id: "tdd", title: "tdd", sel: true}},
+		{name: "starred skills", screen: scStarred, kind: installSkills, item: item{id: "review", title: "review", source: "owner/skills", sel: true}},
+		{name: "plugins", screen: scPlugins, kind: installPlugins, source: "owner/plugins", item: item{id: "hooky", title: "hooky", flags: "codex,hooks", sel: true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			m := newModel()
+			m.global = true
+			m.screen = tt.screen
+			m.curSource = "stale/source"
+			if tt.screen == scSkills {
+				m.curSource = tt.source
+			}
+			m.curMarket = tt.source
+			m.enterPicker(newPicker([]item{tt.item}, true))
+
+			mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = mm.(*model)
+
+			if cmd != nil {
+				t.Fatal("selection started an install before destination confirmation")
+			}
+			if m.screen != scInstallDestination {
+				t.Fatalf("screen = %d, want scInstallDestination", m.screen)
+			}
+			if m.install == nil {
+				t.Fatal("install request was not recorded")
+			}
+			if m.install.kind != tt.kind || m.install.origin != tt.screen || m.install.source != tt.source {
+				t.Fatalf("install request = %#v", m.install)
+			}
+			if m.install.global {
+				t.Fatal("destination inherited the global update scope")
+			}
+		})
+	}
+}
+
+func TestEmptyInstallSelectionDoesNotOpenDestination(t *testing.T) {
+	for _, screen := range []screen{scSkills, scStarred, scPlugins} {
+		t.Run(itoa(int(screen)), func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			m := newModel()
+			m.screen = screen
+			m.enterPicker(newPicker([]item{{id: "one", title: "one"}}, true))
+
+			mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = mm.(*model)
+
+			if cmd == nil {
+				t.Fatal("empty selection did not return mark-first guidance")
+			}
+			if m.screen != screen || m.install != nil {
+				t.Fatalf("empty selection changed install state: screen=%d request=%#v", m.screen, m.install)
+			}
+		})
+	}
+}
+
+func TestInstallDestinationEscapePreservesSelectionState(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	m.screen = scSkills
+	m.curSource = "owner/skills"
+	m.enterPicker(newPicker([]item{
+		{id: "alpha", title: "alpha", sel: true},
+		{id: "bravo", title: "bravo"},
+		{id: "charlie", title: "charlie", sel: true},
+	}, true))
+	m.pick.cursor = 2
+	m.pick.top = 1
+	m.pick.filter = "a"
+	wantPicker := m.pick
+
+	mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = mm.(*model)
+
+	if m.screen != scSkills {
+		t.Fatalf("screen = %d, want scSkills", m.screen)
+	}
+	if m.pick != wantPicker || m.pick.cursor != 2 || m.pick.top != 1 || m.pick.filter != "a" {
+		t.Fatalf("picker state changed: %#v", m.pick)
+	}
+	if got := m.pick.selectedCount(); got != 2 {
+		t.Fatalf("selected count = %d, want 2", got)
+	}
+}
+
+func TestInstallDestinationChoosesGlobalAndStartsInstall(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	m.screen = scInstallDestination
+	m.install = &installRequest{
+		kind:   installSkills,
+		origin: scSkills,
+		source: "owner/skills",
+		items:  []item{{id: "alpha"}, {id: "bravo"}},
+	}
+
+	mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = mm.(*model)
+	if !m.install.global {
+		t.Fatal("down did not choose the global destination")
+	}
+
+	mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(*model)
+	if cmd == nil {
+		t.Fatal("enter did not start the confirmed install")
+	}
+	if m.screen != scRunning {
+		t.Fatalf("screen = %d, want scRunning", m.screen)
+	}
+	if m.install != nil {
+		t.Fatalf("confirmed request was not cleared: %#v", m.install)
+	}
+	if got, want := m.busyTitle, "installing 2 skills globally"; got != want {
+		t.Fatalf("busy title = %q, want %q", got, want)
+	}
+}
+
+func TestInstallArgsUseRequestDestination(t *testing.T) {
+	tests := []struct {
+		name string
+		req  installRequest
+		want []string
+	}{
+		{
+			name: "project skills",
+			req:  installRequest{kind: installSkills, source: "owner/skills", items: []item{{id: "alpha"}}},
+			want: []string{"use", "owner/skills", "--", "--skill", "alpha", "-y"},
+		},
+		{
+			name: "global skills",
+			req:  installRequest{kind: installSkills, global: true, source: "owner/skills", items: []item{{id: "alpha"}, {id: "bravo"}}},
+			want: []string{"-g", "use", "owner/skills", "--", "--skill", "alpha", "--skill", "bravo", "-y"},
+		},
+		{
+			name: "project plugins",
+			req:  installRequest{kind: installPlugins, source: "owner/plugins", items: []item{{id: "plain"}}},
+			want: []string{"plugin", "install", "owner/plugins", "plain"},
+		},
+		{
+			name: "global plugins",
+			req:  installRequest{kind: installPlugins, global: true, source: "owner/plugins", items: []item{{id: "plain"}}},
+			want: []string{"-g", "plugin", "install", "owner/plugins", "plain"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := installArgs(tt.req); strings.Join(got, "\x00") != strings.Join(tt.want, "\x00") {
+				t.Fatalf("install args = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHookPluginRequestRetainsDestinationThroughCheck(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	m.agents = "claude-code codex"
+	req := installRequest{
+		kind:   installPlugins,
+		origin: scPlugins,
+		source: "owner/plugins",
+		global: true,
+		items:  []item{{id: "hooky", flags: "codex,hooks"}},
+	}
+
+	cmd := m.executeInstall(req)
+	if cmd == nil {
+		t.Fatal("hook check command is nil")
+	}
+	if m.pendingInstall == nil || !m.pendingInstall.global {
+		t.Fatalf("pending install lost destination: %#v", m.pendingInstall)
+	}
+	if got, want := installResultTitle(*m.pendingInstall), "install 1 plugin globally"; got != want {
+		t.Fatalf("result title = %q, want %q", got, want)
+	}
+}
+
+func TestTabDoesNothingInInstallFlowScreens(t *testing.T) {
+	for _, screen := range []screen{scSources, scSkills, scStarred, scMarkets, scPlugins} {
+		t.Run(itoa(int(screen)), func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			m := newModel()
+			m.screen = screen
+			m.enterPicker(newPicker([]item{{id: "one", title: "one"}}, screen == scSkills || screen == scStarred || screen == scPlugins))
+
+			mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+			m = mm.(*model)
+
+			if m.global {
+				t.Fatalf("tab enabled update scope on screen %d", screen)
+			}
+		})
 	}
 }
 
@@ -169,7 +380,7 @@ func TestCodexHooksMsgOffRoutesToConfirm(t *testing.T) {
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
 	m = mm.(*model)
 	m.screen = scRunning
-	m.pendingInstall = []string{"plugin", "install", "owner/mkt", "hooky"}
+	m.pendingInstall = &installRequest{kind: installPlugins, origin: scPlugins, source: "owner/mkt", items: []item{{id: "hooky"}}}
 
 	mm, _ = m.Update(codexHooksMsg{state: "off"})
 	m = mm.(*model)
@@ -180,7 +391,7 @@ func TestCodexHooksMsgOffRoutesToConfirm(t *testing.T) {
 	if m.denyCmd == nil {
 		t.Fatal("expected a deny action for the hooks confirm")
 	}
-	if len(m.pendingInstall) != 0 {
+	if m.pendingInstall != nil {
 		t.Fatalf("pendingInstall not cleared: %#v", m.pendingInstall)
 	}
 }
@@ -192,7 +403,7 @@ func TestCodexHooksMsgOnInstallsDirectly(t *testing.T) {
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
 	m = mm.(*model)
 	m.screen = scRunning
-	m.pendingInstall = []string{"plugin", "install", "owner/mkt", "hooky"}
+	m.pendingInstall = &installRequest{kind: installPlugins, origin: scPlugins, source: "owner/mkt", items: []item{{id: "hooky"}}}
 
 	mm, cmd := m.Update(codexHooksMsg{state: "on"})
 	m = mm.(*model)

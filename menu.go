@@ -185,27 +185,11 @@ func actTidy(m *model) (tea.Model, tea.Cmd) {
 
 // installSelected builds the engine call from the marked skills.
 func (m *model) installSelected() tea.Cmd {
-	sel := m.pick.selected()
-	if len(sel) == 0 {
-		return flashFor("nothing marked — press SPACE to mark, then ENTER", 0)
-	}
+	source := m.curSource
 	if m.screen == scStarred {
-		m.busyTitle = "installing " + itoa(len(sel)) + " starred skill(s)"
-		m.screen = scRunning
-		return installGroupedCmd("install starred", m.global, sel)
+		source = ""
 	}
-	args := []string{}
-	if m.global {
-		args = append(args, "-g")
-	}
-	args = append(args, "use", m.curSource, "--")
-	for _, it := range sel {
-		args = append(args, "--skill", it.id)
-	}
-	args = append(args, "-y")
-	m.busyTitle = "installing " + itoa(len(sel)) + " skill(s) from " + short(m.curSource)
-	m.screen = scRunning
-	return opCmd("install", args...)
+	return m.beginInstall(installSkills, source)
 }
 
 // installSelectedPlugins builds the plugin-install engine call from the marked
@@ -213,31 +197,97 @@ func (m *model) installSelected() tea.Cmd {
 // are parked in pendingInstall and the codex features.hooks state is checked
 // first so the user can confirm enabling it (codexHooksMsg finishes the job).
 func (m *model) installSelectedPlugins() tea.Cmd {
+	return m.beginInstall(installPlugins, m.curMarket)
+}
+
+func (m *model) beginInstall(kind installKind, source string) tea.Cmd {
 	sel := m.pick.selected()
 	if len(sel) == 0 {
 		return flashFor("nothing marked — press SPACE to mark, then ENTER", 0)
 	}
-	args := []string{}
-	if m.global {
+	m.install = &installRequest{
+		kind:   kind,
+		items:  append([]item(nil), sel...),
+		source: source,
+		origin: m.screen,
+	}
+	m.screen = scInstallDestination
+	return nil
+}
+
+func (m *model) executeInstall(req installRequest) tea.Cmd {
+	m.busyTitle = installBusyTitle(req)
+	m.screen = scRunning
+
+	if req.kind == installPlugins {
+		if installNeedsHooks(req) && strings.Contains(m.agents, "codex") {
+			pending := req
+			m.pendingInstall = &pending
+			m.busyTitle = "checking codex hooks for " + itoa(len(req.items)) + " " + installNoun(req.kind, len(req.items) != 1)
+			return codexHooksCmd()
+		}
+		return m.runPluginInstall(req, false)
+	}
+
+	if req.origin == scStarred {
+		return installGroupedCmd(installResultTitle(req), req.global, req.items)
+	}
+	return opCmd(installResultTitle(req), installArgs(req)...)
+}
+
+func (m *model) runPluginInstall(req installRequest, denyHooks bool) tea.Cmd {
+	args := installArgs(req)
+	if denyHooks {
+		args = hooksDenyArgs(args)
+	}
+	m.busyTitle = installBusyTitle(req)
+	m.screen = scRunning
+	return opCmd(installResultTitle(req), args...)
+}
+
+func installArgs(req installRequest) []string {
+	args := make([]string, 0, len(req.items)*2+5)
+	if req.global {
 		args = append(args, "-g")
 	}
-	args = append(args, "plugin", "install", m.curMarket)
-	needHooks := false
-	for _, it := range sel {
-		args = append(args, it.id)
+	if req.kind == installPlugins {
+		args = append(args, "plugin", "install", req.source)
+		for _, it := range req.items {
+			args = append(args, it.id)
+		}
+		return args
+	}
+
+	args = append(args, "use", req.source, "--")
+	for _, it := range req.items {
+		args = append(args, "--skill", it.id)
+	}
+	return append(args, "-y")
+}
+
+func installNeedsHooks(req installRequest) bool {
+	for _, it := range req.items {
 		if hasFlag(it.flags, "hooks") {
-			needHooks = true
+			return true
 		}
 	}
-	if needHooks && strings.Contains(m.agents, "codex") {
-		m.pendingInstall = args
-		m.busyTitle = "checking codex hooks"
-		m.screen = scRunning
-		return codexHooksCmd()
+	return false
+}
+
+func installBusyTitle(req installRequest) string {
+	return "installing " + installTitleSuffix(req)
+}
+
+func installResultTitle(req installRequest) string {
+	return "install " + installTitleSuffix(req)
+}
+
+func installTitleSuffix(req installRequest) string {
+	destination := "in this project"
+	if req.global {
+		destination = "globally"
 	}
-	m.busyTitle = "installing " + itoa(len(sel)) + " plugin(s)"
-	m.screen = scRunning
-	return opCmd("install plugins", args...)
+	return itoa(len(req.items)) + " " + installNoun(req.kind, len(req.items) != 1) + " " + destination
 }
 
 func installGroupedCmd(title string, global bool, items []item) tea.Cmd {

@@ -52,6 +52,115 @@ func TestScreenInstructionsLiveInContextualHelp(t *testing.T) {
 	}
 }
 
+func TestInstallDestinationUsesRewrittenChrome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	m.width, m.height = 96, 30
+	m.projectDir = "/workspace/skillswoop"
+	m.agents = "claude-code codex"
+	m.install = &installRequest{
+		kind:   installSkills,
+		source: "owner/skills",
+		origin: scSkills,
+		items: []item{
+			{id: "alpha", title: "alpha"},
+			{id: "bravo", title: "bravo"},
+		},
+	}
+	m.screen = scInstallDestination
+	m.layout()
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"INSTALL 2 SKILLS",
+		"From owner/skills",
+		"alpha, bravo",
+		"This project",
+		"Only in /workspace/skillswoop",
+		"Globally",
+		"Available in every project for claude-code and codex",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("destination view missing %q", want)
+		}
+	}
+
+	status := stripANSI(m.statusBar())
+	for _, want := range []string{"↑↓ choose", "⏎ install", "esc selection", "? keys", "agents claude-code ⋅ codex"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("destination status missing %q: %q", want, status)
+		}
+	}
+	if strings.Contains(status, "scope") {
+		t.Fatalf("destination status exposes update scope: %q", status)
+	}
+}
+
+func TestMenuLabelsScopeAsUpdateOnly(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	m.width, m.height = 96, 30
+	m.layout()
+
+	status := stripANSI(m.statusBar())
+	if !strings.Contains(status, "update scope PROJECT") {
+		t.Fatalf("menu status does not label update scope: %q", status)
+	}
+}
+
+func TestStarredInstallSummaryNamesSourcesAndCollapsesOverflow(t *testing.T) {
+	req := installRequest{
+		kind:   installSkills,
+		origin: scStarred,
+		items: []item{
+			{id: "alpha", source: "one/skills"},
+			{id: "bravo", source: "two/skills"},
+			{id: "charlie", source: "three/skills"},
+			{id: "delta", source: "four/skills"},
+			{id: "echo", source: "five/skills"},
+		},
+	}
+
+	got := selectionSummary(req)
+	for _, want := range []string{"alpha (one/skills)", "bravo (two/skills)", "charlie (three/skills)", "+ 2 more"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "delta") || strings.Contains(got, "echo") {
+		t.Fatalf("summary did not collapse overflow: %q", got)
+	}
+}
+
+func TestInstallDestinationFitsSupportedTerminalWidths(t *testing.T) {
+	for _, size := range []tea.WindowSizeMsg{
+		{Width: 24, Height: 12},
+		{Width: 40, Height: 14},
+		{Width: 96, Height: 30},
+	} {
+		t.Run(fmt.Sprintf("%dx%d", size.Width, size.Height), func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			m := newModel()
+			m.projectDir = "/workspace/a-project-with-a-long-name"
+			m.install = &installRequest{
+				kind:   installPlugins,
+				origin: scPlugins,
+				source: "owner/a-marketplace-with-a-long-name",
+				items:  []item{{id: "one"}, {id: "two"}, {id: "three"}, {id: "four"}},
+			}
+			m.screen = scInstallDestination
+			var mm tea.Model = m
+			mm, _ = mm.Update(size)
+
+			for i, line := range strings.Split(mm.View(), "\n") {
+				if got := lipgloss.Width(line); got > size.Width {
+					t.Fatalf("line %d width = %d, want <= %d", i+1, got, size.Width)
+				}
+			}
+		})
+	}
+}
+
 func TestMenuFitsSupportedTerminalSizes(t *testing.T) {
 	for _, size := range []tea.WindowSizeMsg{
 		{Width: 24, Height: 12},
