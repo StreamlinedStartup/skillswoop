@@ -72,11 +72,16 @@ Run `swoop` with no arguments for the TUI.
 | `a` | mark all / none |
 | `s` | star / unstar the highlighted skill in a repo skill list |
 | `/` | fuzzy-filter skills in a repo skill list |
-| `enter` | select / confirm |
+| `enter` | select / continue / confirm |
 | `ctrl+r` | rename a source (set a display alias) |
-| `tab` | toggle project / global scope |
+| `tab` | toggle project / global update scope from the main menu |
 | `?` | show contextual key help |
 | `esc` | back · `q` quit |
+
+Skill and plugin installs add a destination confirmation after items are marked.
+Each confirmation starts on **This project**. Choose **Globally** when the same
+install should be available in every project. The main-menu scope indicator only
+controls updates and does not preselect an install destination.
 
 Every action is also available as a non-interactive command:
 
@@ -96,7 +101,7 @@ swoop --version
 
 ## Plugins
 
-Both agents have native plugin systems (plugins bundle skills, hooks, MCP servers, and — for Claude — commands/agents; hooks auto-wire on install). swoop drives each agent's own plugin CLI and installs to every compatible configured agent at once. In the TUI: **Add a marketplace** → **Install plugins** (rows show `[hooks]` / `[mcp]` badges) → **Remove plugins**.
+Both agents have native plugin systems (plugins bundle skills, hooks, MCP servers, and commands/agents for Claude; hooks auto-wire on install). swoop drives each agent's own plugin CLI and installs to every compatible configured agent at once. In the TUI: **Add a marketplace** → **Install plugins** (rows show `[hooks]` / `[mcp]` badges) → choose **This project** or **Globally** → **Remove plugins**.
 
 ```sh
 swoop mkt add anthropics/claude-plugins-official  # register a marketplace with claude + codex
@@ -109,11 +114,12 @@ swoop mkt remove anthropics/claude-plugins-official
 
 A marketplace repo may only ship one agent's manifest format — swoop installs to the agents it can and warns about the ones it skipped. Installing a hook-bearing plugin for Codex offers to enable `codex features.hooks` first (`--no-hooks-enable` skips that).
 
-Scopes: `-g` installs user-wide (Claude `--scope user`, `codex plugin add`). In the default project scope, Claude installs with `--scope project`, and Codex plugins are **vendored into the repo** — copied to `./plugins/<name>/` and registered in `./.agents/plugins/marketplace.json`, which Codex auto-discovers. Finish inside Codex with `/plugins` (install & enable) and `/hooks` (trust the plugin's hooks).
+Scopes: `-g` installs user-wide (Claude `--scope user`, `codex plugin add`). In project scope, Claude installs with `--scope project`, and Codex plugins are **vendored into the repo**: copied to `./plugins/<name>/` and registered in `./.agents/plugins/marketplace.json`, which Codex auto-discovers. Finish inside Codex with `/plugins` (install and enable) and `/hooks` (trust the plugin's hooks).
 
 ## Where skills are installed
 
-By default skills install into the current directory:
+The TUI defaults every install confirmation to **This project**, which installs
+into the current directory:
 
 - Claude Code: `./.claude/skills/<name>`
 - Codex: `./.agents/skills/<name>`

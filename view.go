@@ -425,9 +425,9 @@ func (m *model) compactKeys() string {
 		if m.filtering {
 			return key("type", "filter") + key("⏎", "list") + key("esc", "clear") + key("?", "keys")
 		}
-		return key("↑↓", "move") + key("space", "mark") + key("⏎", "install") + key("?", "keys")
+		return key("↑↓", "move") + key("space", "mark") + key("⏎", "continue") + key("?", "keys")
 	case scStarred:
-		return key("↑↓", "move") + key("space", "mark") + key("⏎", "install") + key("?", "keys")
+		return key("↑↓", "move") + key("space", "mark") + key("⏎", "continue") + key("?", "keys")
 	case scBrowseResults, scRemove, scPluginRemove:
 		return key("↑↓", "move") + key("space", "mark") + key("⏎", "confirm") + key("?", "keys")
 	case scMarkets:
@@ -436,7 +436,7 @@ func (m *model) compactKeys() string {
 		if m.filtering {
 			return key("type", "filter") + key("⏎", "list") + key("esc", "clear") + key("?", "keys")
 		}
-		return key("↑↓", "move") + key("space", "mark") + key("⏎", "install") + key("?", "keys")
+		return key("↑↓", "move") + key("space", "mark") + key("⏎", "continue") + key("?", "keys")
 	case scInstallDestination:
 		return key("↑↓", "choose") + key("⏎", "install") + key("esc", "selection") + key("?", "keys")
 	case scBrowseInput, scAdd, scAgents:

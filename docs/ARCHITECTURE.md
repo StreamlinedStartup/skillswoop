@@ -82,7 +82,7 @@ sequenceDiagram
 
 ## Screen state machine
 
-The TUI has 16 screens. `model.screen` is an enum (`scMenu`, `scSources`, etc.) that controls what `View()` renders and what keys `onKey()` responds to.
+The TUI has 18 screens. `model.screen` is an enum (`scMenu`, `scSources`, etc.) that controls what `View()` renders and what keys `onKey()` responds to.
 
 ```mermaid
 stateDiagram-v2
@@ -100,9 +100,11 @@ stateDiagram-v2
     scSources --> scRunning: enter source
     scRunning --> scSkills: skillsMsg (success)
     scRunning --> scResult: opDoneMsg
-    scSkills --> scRunning: install selected → opCmd
+    scSkills --> scInstallDestination: continue with marked skills
     scSkills --> scRunning: esc → loadSourcesCmd
-    scStarred --> scRunning: install selected → grouped engine calls
+    scStarred --> scInstallDestination: continue with marked skills
+    scInstallDestination --> scSkills: esc to selection
+    scInstallDestination --> scStarred: esc to selection
 
     scSources --> scRename: ctrl+r
     scRename --> scSources: save/cancel
@@ -128,8 +130,10 @@ stateDiagram-v2
     scRunning --> scPlugins: pluginsMsg (success)
     scMarkets --> scConfirm: x (remove marketplace)
     scMarkets --> scRunning: u → mkt update
-    scPlugins --> scRunning: install marked (no hooks) → opCmd
-    scPlugins --> scRunning: install marked (hooks) → codexHooksCmd
+    scPlugins --> scInstallDestination: continue with marked plugins
+    scInstallDestination --> scPlugins: esc to selection
+    scInstallDestination --> scRunning: confirm project or global destination
+    scRunning --> scRunning: hook plugin → codexHooksCmd
     scRunning --> scConfirm: codexHooksMsg "off"
     scMenu --> scAdd: "Add a marketplace"
     scMenu --> scRunning: "Remove plugins"
@@ -137,7 +141,7 @@ stateDiagram-v2
     scPluginRemove --> scRunning: remove marked → opCmd
 ```
 
-**The codex hooks round-trip**: installing a hook-flagged plugin with codex targeted parks the install args in `pendingInstall` and fires `_codex_hooks`. If the flag is `off`, `scConfirm` asks whether to enable it — *yes* runs the plain install (the engine auto-enables under `SWOOP_ASSUME_YES`), *no* runs the same install with `--no-hooks-enable` via the optional `denyCmd` hook on `scConfirm` (nil `denyCmd` keeps the old "no = go back" behavior). `on`/`n/a` installs directly.
+**The codex hooks round-trip**: installing a hook-flagged plugin with codex targeted parks the explicit `installRequest` in `pendingInstall` and fires `_codex_hooks`. The request retains its project/global destination and count-based titles. If the flag is `off`, `scConfirm` asks whether to enable it. *Yes* runs the plain install because the engine auto-enables under `SWOOP_ASSUME_YES`; *no* runs the same install with `--no-hooks-enable` through the optional `denyCmd` hook. `on` and `n/a` install directly.
 
 **The `scRunning → scResult → scMenu` cycle** is the main action loop: every operation goes through a spinner screen, lands on a result screen with scrollable output, then returns to the menu.
 
@@ -160,7 +164,9 @@ type model struct {
     input  textinput.Model
     spin   spinner.Model
     vp     viewport.Model
-    global bool         // project vs global scope toggle
+    global bool         // project vs global update scope toggle
+    install *installRequest // explicit destination choice for marked items
+    projectDir string   // absolute current directory shown in destination copy
     curSource string    // source being drilled into
     filtering bool      // slash-filter mode in the repo skills picker
     // ... result/confirm state, flash message, agents
@@ -195,11 +201,14 @@ Layout math lives in `layout()` — calculates `innerW`/`innerH` accounting for 
 - `vp.View()` for the result viewport
 - `spin.View()` for the running spinner
 
-`statusBar()` renders a two-column footer: key hints + scope + agents.
+`statusBar()` renders a two-column footer with key hints and configured agents.
+Only the main menu adds the labeled update scope. Install selection screens do
+not expose a scope toggle, and `scInstallDestination` renders the project/global
+choice in the panel.
 
 ### `menu.go` (185 lines)
 
-Defines the 13 main menu entries as `menuEntry` structs, each with an `act` function that returns a `(tea.Model, tea.Cmd)`. Also contains `installSelected()` which builds the engine command from marked skills, and `installSelectedPlugins()` which does the same for marked plugins (detouring through the codex hooks check when needed).
+Defines the main menu entries as `menuEntry` structs, each with an `act` function that returns a `(tea.Model, tea.Cmd)`. It creates `installRequest` values from marked skills or plugins, builds destination-specific arguments, groups starred skills by source, and preserves plugin requests through the Codex hooks check.
 
 ### `picker.go` (305 lines)
 

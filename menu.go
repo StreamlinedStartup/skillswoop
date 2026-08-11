@@ -9,7 +9,7 @@ import (
 func menuDomains() []menuDomain {
 	return []menuDomain{
 		{label: "SKILLS", entries: []menuEntry{
-			{"◢◤", "Install skills", "pick a source, then swoop specific skills into this folder", actInstall},
+			{"◢◤", "Install skills", "pick a source and skills, then choose where to install", actInstall},
 			{"★", "Starred skills", "install skills you've starred for quick reuse", actStarred},
 			{"⟳", "Update this folder", "pull latest from GitHub for skills in the current dir", actUpdateHere},
 			{"⟳⟳", "Update every folder", "refresh every folder you've installed into", actUpdateAll},
@@ -17,7 +17,7 @@ func menuDomains() []menuDomain {
 			{"⚙", "Sources…", "add or remove saved skill sources", actSourceActions},
 		}},
 		{label: "PLUGINS", entries: []menuEntry{
-			{"⬢", "Install plugins", "pick a marketplace, then install plugins (hooks auto-wire)", actInstallPlugins},
+			{"⬢", "Install plugins", "pick a marketplace and plugins, then choose where to install", actInstallPlugins},
 			{"⊖", "Remove plugins", "uninstall plugins from claude + codex", actRemovePlugins},
 			{"⊕", "Add a marketplace", "register a plugin marketplace repo", actAddMarketplace},
 			{"⚙", "Marketplaces…", "open, rename, remove, or update saved marketplaces", actInstallPlugins},
@@ -183,7 +183,7 @@ func actTidy(m *model) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// installSelected builds the engine call from the marked skills.
+// installSelected opens destination choice for the marked skills.
 func (m *model) installSelected() tea.Cmd {
 	source := m.curSource
 	if m.screen == scStarred {
@@ -192,10 +192,7 @@ func (m *model) installSelected() tea.Cmd {
 	return m.beginInstall(installSkills, source)
 }
 
-// installSelectedPlugins builds the plugin-install engine call from the marked
-// plugins. When a marked plugin bundles hooks and codex is a target, the args
-// are parked in pendingInstall and the codex features.hooks state is checked
-// first so the user can confirm enabling it (codexHooksMsg finishes the job).
+// installSelectedPlugins opens destination choice for the marked plugins.
 func (m *model) installSelectedPlugins() tea.Cmd {
 	return m.beginInstall(installPlugins, m.curMarket)
 }

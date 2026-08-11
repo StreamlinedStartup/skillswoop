@@ -16,7 +16,7 @@ func TestMenuDisclosesOnlySelectedDescription(t *testing.T) {
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
 
 	view := stripANSI(mm.View())
-	if !strings.Contains(view, "pick a source, then swoop specific skills into this folder") {
+	if !strings.Contains(view, "pick a source and skills, then choose where to install") {
 		t.Fatal("selected action description is missing")
 	}
 	if strings.Contains(view, "install skills you've starred for quick reuse") {
