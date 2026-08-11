@@ -61,8 +61,6 @@ type model struct {
 	vp            viewport.Model
 	vpReady       bool
 
-	entries []menuEntry
-
 	global         bool     // scope toggle (project default)
 	curSource      string   // source being drilled into
 	curMarket      string   // marketplace being drilled into (scPlugins)

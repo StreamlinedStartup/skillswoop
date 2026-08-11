@@ -303,7 +303,7 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "q":
 			return m, tea.Quit
 		case "enter", " ":
-			return m.entries[m.menu.cursor].act(m)
+			return m.domains[m.domain].entries[m.menu.cursor].act(m)
 		}
 		return m, nil
 
@@ -315,10 +315,6 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pick.move(-1)
 		case "down", "j":
 			m.pick.move(1)
-		case "home":
-			m.pick.home()
-		case "end":
-			m.pick.end()
 		case "enter", " ":
 			return sourceActionEntries()[m.pick.cursor].act(m)
 		}

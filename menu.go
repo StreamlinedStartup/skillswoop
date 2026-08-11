@@ -56,15 +56,13 @@ func (m *model) setDomain(next int) {
 	}
 	next = (next%len(m.domains) + len(m.domains)) % len(m.domains)
 	m.domain = next
-	m.entries = m.domains[next].entries
-	m.menu = newPicker(menuItems(m.entries), false)
+	m.menu = newPicker(menuItems(m.domains[next].entries), false)
 	m.menu.cursor = m.domainCursors[next]
 	m.menu.clampWindow()
 	m.menu.setSize(m.innerW, m.innerH-3)
 }
 
 func actSourceActions(m *model) (tea.Model, tea.Cmd) {
-	m.prev = scMenu
 	m.enterPicker(newPicker(menuItems(sourceActionEntries()), false))
 	m.screen = scSourceActions
 	return m, nil

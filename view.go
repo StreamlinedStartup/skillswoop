@@ -152,28 +152,30 @@ func (m *model) menuBody() string {
 	if desc == "" && m.menu.cursor < len(domain.entries) {
 		desc = domain.entries[m.menu.cursor].desc
 	}
-	desc = truncate(desc, m.innerW)
-	if m.innerH < 12 {
-		return m.domainTabs() + "\n" + heading(domain.label, "") + "\n" +
-			m.menu.view() + "\n" + rowDescCur.Render(desc)
+	compact := m.innerH < 12
+	separator := "\n\n"
+	if compact {
+		separator = "\n"
 	}
-	rule := rowDesc.Render(strings.Repeat("─", m.innerW))
-	return m.domainTabs() + "\n\n" + heading(domain.label, "") + "\n\n" +
-		m.menu.view() + "\n\n" + rule + "\n" + rowDescCur.Render(desc)
+	return m.domainTabs() + separator + m.disclosureBody(domain.label, "", m.menu, desc, compact)
 }
 
 func (m *model) sourceActionsBody() string {
 	entries := sourceActionEntries()
 	desc := ""
 	if m.pick.cursor < len(entries) {
-		desc = truncate(entries[m.pick.cursor].desc, m.innerW)
+		desc = entries[m.pick.cursor].desc
 	}
-	if m.innerH < 9 {
-		return heading("SOURCES", "") + "\n" + m.pick.view() + "\n" + rowDescCur.Render(desc)
+	return m.disclosureBody("SOURCES", "manage saved skill sources", m.pick, desc, m.innerH < 9)
+}
+
+func (m *model) disclosureBody(label, sub string, p *picker, desc string, compact bool) string {
+	desc = truncate(desc, m.innerW)
+	if compact {
+		return heading(label, "") + "\n" + p.view() + "\n" + rowDescCur.Render(desc)
 	}
 	rule := rowDesc.Render(strings.Repeat("─", m.innerW))
-	return heading("SOURCES", "manage saved skill sources") + "\n\n" +
-		m.pick.view() + "\n\n" + rule + "\n" + rowDescCur.Render(desc)
+	return heading(label, sub) + "\n\n" + p.view() + "\n\n" + rule + "\n" + rowDescCur.Render(desc)
 }
 
 func (m *model) domainTabs() string {
@@ -212,9 +214,7 @@ func (m *model) contextLabel() string {
 	switch m.screen {
 	case scMenu:
 		return m.domains[m.domain].label
-	case scSourceActions:
-		return "SOURCES"
-	case scSources:
+	case scSourceActions, scSources:
 		return "SOURCES"
 	case scSkills:
 		return "SKILLS"
