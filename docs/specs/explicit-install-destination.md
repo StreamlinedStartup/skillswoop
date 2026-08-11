@@ -2,6 +2,12 @@
 
 Status: Approved
 
+Reconciled with the progressive domain navigation rewrite on 2026-08-10. The
+approved destination behavior is unchanged. The destination screen must use the
+rewritten UI's bordered panel, compact status bar, and contextual help instead
+of restoring the older inline footer treatment shown when this spec was first
+written.
+
 ## Objective
 
 Add an explicit destination step to the SkillSwoop terminal UI for every install flow:
@@ -34,9 +40,9 @@ INSTALL · mattpocock/skills
 ▌ ○ tdd              Test-driven development
   ◉ grill-with-docs  Challenge a plan against the domain model
 
-  2 skills selected
+  2 skills marked
 
-↑↓ move   space mark   / filter   enter continue   esc back
+↑↓ move   space mark   enter continue   ? keys
 ```
 
 ### Destination screen
@@ -57,10 +63,15 @@ INSTALL 2 SKILLS
   ○ Globally
     Available in every project for Claude Code and Codex
 
-↑↓ choose   enter install   esc change selection
+↑↓ choose   enter install   esc selection   ? keys
 ```
 
 The plugin flow uses the same destination screen with the heading changed to `INSTALL <N> PLUGIN(S)`. For long selections, the summary shows the first three names followed by `+ N more`.
+
+The examples show panel content followed by compact status-bar hints. Secondary
+bindings such as `j`/`k` live in contextual help, consistent with the rewritten
+UI. The main menu's `SKILLS`, `PLUGINS`, and `SETTINGS` domain tabs remain
+unchanged.
 
 ### Flow
 
@@ -97,7 +108,8 @@ Original selection list     Existing install execution
 - Escape returns to the original marked list with marks, filter, scroll position, and cursor preserved.
 - Tab does nothing on source, marketplace, skill, starred-skill, and plugin install screens.
 - Enter with no marked items keeps the user on the list and shows the existing mark-first guidance.
-- The footer reads `↑↓ choose`, `enter install`, and `esc change selection` on the destination screen.
+- The compact status bar reads `↑↓ choose`, `enter install`, `esc selection`, and `? keys` on the destination screen.
+- Contextual help describes the same actions and includes `j`/`k` as alternate movement keys.
 
 ### Execution
 
@@ -110,9 +122,10 @@ Original selection list     Existing install execution
 
 ### Scope indicator
 
-- Remove the unrelated persistent scope indicator from install screens.
-- Keep existing main-menu update scope behavior.
+- Remove the unrelated persistent scope indicator from every screen except the main menu.
+- Keep existing main-menu update scope behavior and its Tab binding.
 - Label the main-menu indicator as `update scope` so it is not mistaken for the install destination.
+- Keep the configured-agents indicator in the shared status bar.
 
 ## Tech Stack
 
@@ -150,7 +163,8 @@ docs/ARCHITECTURE.md      TUI state-machine documentation
 docs/specs/               Approved feature specifications
 ```
 
-The embedded Bash engine is outside this feature's implementation scope because its project and global behavior already exists.
+The embedded Bash engine and progressive domain navigation are outside this
+feature's implementation scope because their behavior already exists.
 
 ## Code Style
 
@@ -165,6 +179,10 @@ type installRequest struct {
 	global bool
 }
 ```
+
+The existing `model.global` value remains update scope. Install destination is
+owned by `installRequest.global`, begins as `false` for every request, and must
+not affect domain cursors or menu navigation.
 
 Use existing naming conventions, `gofmt`, explicit empty-selection handling, and pure helpers for selection summaries and scope-specific argument construction. Do not add logging for ordinary UI transitions.
 
