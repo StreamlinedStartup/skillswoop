@@ -39,9 +39,13 @@ func heading(label, sub string) string {
 }
 
 func (m *model) buildBody() string {
+	if m.showHelp {
+		return m.helpBody()
+	}
+
 	// defensive: list screens must never render before their picker exists
 	switch m.screen {
-	case scSources, scSkills, scStarred, scBrowseResults, scRemove,
+	case scSourceActions, scSources, scSkills, scStarred, scBrowseResults, scRemove,
 		scMarkets, scPlugins, scPluginRemove:
 		if m.pick == nil {
 			return heading("LOADING", "") + "\n\n" + rowDesc.Render("  …")
@@ -51,11 +55,13 @@ func (m *model) buildBody() string {
 	switch m.screen {
 
 	case scMenu:
-		return heading("MAIN", "what do you want to do?") + "\n\n" +
-			m.menu.view() + "\n" + m.menu.scrollFooter()
+		return m.menuBody()
+
+	case scSourceActions:
+		return m.sourceActionsBody()
 
 	case scSources:
-		return heading("INSTALL", "pick a source · ctrl+r renames") + "\n\n" +
+		return heading("INSTALL", "pick a source") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scRename:
@@ -64,47 +70,44 @@ func (m *model) buildBody() string {
 			label = "RENAME marketplace"
 		}
 		return heading(label, short(m.renameURL)) + "\n\n" +
-			m.input.View() + "\n\n" +
-			rowDesc.Render("ENTER save · ESC cancel · blank = show the repo URL")
+			m.input.View() + "\n\n" + rowDesc.Render("blank shows the repository URL")
 
 	case scSkills:
-		sub := "SPACE marks · s stars · / filters · ENTER installs marked"
 		if m.filtering {
-			return heading("INSTALL · "+short(m.curSource), sub) + "\n" +
+			return heading("INSTALL · "+short(m.curSource), "") + "\n" +
 				m.input.View() + "\n" +
 				m.pick.view() + "\n" + m.pick.scrollFooter()
 		}
-		return heading("INSTALL · "+short(m.curSource), sub) + "\n\n" +
+		return heading("INSTALL · "+short(m.curSource), "") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scStarred:
-		return heading("STARRED skills", "SPACE marks · ENTER installs marked") + "\n\n" +
+		return heading("STARRED skills", "") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scBrowseResults:
-		return heading("BROWSE", "SPACE marks repos to remember · ENTER saves") + "\n\n" +
+		return heading("BROWSE", "results from skills.sh") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scRemove:
-		return heading("REMOVE", "SPACE marks sources to forget · ENTER removes") + "\n\n" +
+		return heading("REMOVE", "saved skill sources") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scMarkets:
-		return heading("PLUGINS", "pick a marketplace · ctrl+r renames · x removes · u updates") + "\n\n" +
+		return heading("MARKETPLACES", "pick a marketplace") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scPlugins:
-		sub := "SPACE marks · / filters · ENTER installs marked"
 		if m.filtering {
-			return heading("PLUGINS · "+short(m.curMarket), sub) + "\n" +
+			return heading("PLUGINS · "+short(m.curMarket), "") + "\n" +
 				m.input.View() + "\n" +
 				m.pick.view() + "\n" + m.pick.scrollFooter()
 		}
-		return heading("PLUGINS · "+short(m.curMarket), sub) + "\n\n" +
+		return heading("PLUGINS · "+short(m.curMarket), "") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scPluginRemove:
-		return heading("REMOVE plugins", "SPACE marks plugins to uninstall · ENTER removes") + "\n\n" +
+		return heading("REMOVE plugins", "installed for configured agents") + "\n\n" +
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scBrowseInput:
@@ -143,10 +146,159 @@ func (m *model) buildBody() string {
 	return ""
 }
 
+func (m *model) menuBody() string {
+	domain := m.domains[m.domain]
+	desc := m.flash
+	if desc == "" && m.menu.cursor < len(domain.entries) {
+		desc = domain.entries[m.menu.cursor].desc
+	}
+	desc = truncate(desc, m.innerW)
+	if m.innerH < 12 {
+		return m.domainTabs() + "\n" + heading(domain.label, "") + "\n" +
+			m.menu.view() + "\n" + rowDescCur.Render(desc)
+	}
+	rule := rowDesc.Render(strings.Repeat("─", m.innerW))
+	return m.domainTabs() + "\n\n" + heading(domain.label, "") + "\n\n" +
+		m.menu.view() + "\n\n" + rule + "\n" + rowDescCur.Render(desc)
+}
+
+func (m *model) sourceActionsBody() string {
+	entries := sourceActionEntries()
+	desc := ""
+	if m.pick.cursor < len(entries) {
+		desc = truncate(entries[m.pick.cursor].desc, m.innerW)
+	}
+	if m.innerH < 9 {
+		return heading("SOURCES", "") + "\n" + m.pick.view() + "\n" + rowDescCur.Render(desc)
+	}
+	rule := rowDesc.Render(strings.Repeat("─", m.innerW))
+	return heading("SOURCES", "manage saved skill sources") + "\n\n" +
+		m.pick.view() + "\n\n" + rule + "\n" + rowDescCur.Render(desc)
+}
+
+func (m *model) domainTabs() string {
+	if m.innerW < 38 {
+		return rowDesc.Render("‹ ") + titleStyle.Render(m.domains[m.domain].label) +
+			rowDesc.Render("  "+itoa(m.domain+1)+"/"+itoa(len(m.domains))+" ›")
+	}
+	var tabs []string
+	for i, domain := range m.domains {
+		label := "  " + domain.label + "  "
+		if i == m.domain {
+			tabs = append(tabs, titleStyle.Render("["+label+"]"))
+		} else {
+			tabs = append(tabs, rowDesc.Render(" "+label+" "))
+		}
+	}
+	return strings.Join(tabs, "   ")
+}
+
+type keyHint struct {
+	keys string
+	desc string
+}
+
+func (m *model) helpBody() string {
+	hints := m.contextKeys()
+	lines := []string{heading("KEYS · "+m.contextLabel(), "")}
+	for _, hint := range hints {
+		lines = append(lines, helpKey.Render(padRight(hint.keys, 18))+rowDescCur.Render(hint.desc))
+	}
+	lines = append(lines, helpKey.Render(padRight("? / esc", 18))+rowDescCur.Render("close help"))
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) contextLabel() string {
+	switch m.screen {
+	case scMenu:
+		return m.domains[m.domain].label
+	case scSourceActions:
+		return "SOURCES"
+	case scSources:
+		return "SOURCES"
+	case scSkills:
+		return "SKILLS"
+	case scStarred:
+		return "STARRED"
+	case scBrowseInput, scBrowseResults:
+		return "BROWSE"
+	case scAdd:
+		if m.addMarketplace {
+			return "ADD MARKETPLACE"
+		}
+		return "ADD SOURCE"
+	case scAgents:
+		return "DEFAULT AGENTS"
+	case scRemove:
+		return "REMOVE SOURCES"
+	case scRename:
+		return "RENAME"
+	case scConfirm:
+		return "CONFIRM"
+	case scResult:
+		return "RESULT"
+	case scMarkets:
+		return "MARKETPLACES"
+	case scPlugins:
+		return "PLUGINS"
+	case scPluginRemove:
+		return "REMOVE PLUGINS"
+	}
+	return "SWOOP"
+}
+
+func (m *model) contextKeys() []keyHint {
+	move := keyHint{"↑ / ↓ · j / k", "move selection"}
+	back := keyHint{"esc", "go back"}
+	switch m.screen {
+	case scMenu:
+		return []keyHint{
+			{"← / → · h / l", "change section"},
+			move,
+			{"enter / space", "select action"},
+			{"tab", "toggle scope"},
+			{"q", "quit"},
+		}
+	case scSourceActions:
+		return []keyHint{move, {"enter / space", "select action"}, back, {"q", "return to menu"}}
+	case scSources:
+		return []keyHint{move, {"enter", "open source"}, {"ctrl+r", "rename source"}, {"tab", "toggle scope"}, back}
+	case scSkills:
+		if m.filtering {
+			return []keyHint{{"type", "filter skills"}, {"enter", "return to skill list"}, {"esc", "clear filter"}}
+		}
+		return []keyHint{move, {"space", "mark skill"}, {"s", "star skill"}, {"/", "filter skills"}, {"a", "mark all or none"}, {"enter", "install marked skills"}, {"tab", "toggle scope"}, back}
+	case scStarred:
+		return []keyHint{move, {"space", "mark skill"}, {"a", "mark all or none"}, {"enter", "install marked skills"}, {"tab", "toggle scope"}, back}
+	case scBrowseResults:
+		return []keyHint{move, {"space", "mark repository"}, {"a", "mark all or none"}, {"enter", "remember marked sources"}, back}
+	case scRemove:
+		return []keyHint{move, {"space", "mark source"}, {"enter", "remove marked sources"}, back}
+	case scMarkets:
+		return []keyHint{move, {"enter", "open marketplace"}, {"ctrl+r", "rename marketplace"}, {"x", "remove marketplace"}, {"u", "update marketplaces"}, {"tab", "toggle scope"}, back}
+	case scPlugins:
+		if m.filtering {
+			return []keyHint{{"type", "filter plugins"}, {"enter", "return to plugin list"}, {"esc", "clear filter"}}
+		}
+		return []keyHint{move, {"space", "mark plugin"}, {"/", "filter plugins"}, {"a", "mark all or none"}, {"enter", "install marked plugins"}, {"tab", "toggle scope"}, back}
+	case scPluginRemove:
+		return []keyHint{move, {"space", "mark plugin"}, {"enter", "remove marked plugins"}, back}
+	case scRename:
+		return []keyHint{{"type", "edit display name"}, {"enter", "save"}, {"esc", "cancel"}}
+	case scBrowseInput:
+		return []keyHint{{"type", "enter search keywords"}, {"enter", "search skills.sh"}, {"esc", "cancel"}}
+	case scAdd, scAgents:
+		return []keyHint{{"type", "edit value"}, {"enter", "confirm"}, {"esc", "cancel"}}
+	case scConfirm:
+		return []keyHint{{"y / enter", "confirm"}, {"n", "decline"}, {"esc", "cancel"}}
+	case scResult:
+		return []keyHint{{"↑ / ↓", "scroll output"}, {"esc / enter", "return to menu"}}
+	}
+	return nil
+}
+
 func (m *model) inputBody(label, sub string) string {
-	return heading(label, sub) + "\n\n" +
-		m.input.View() + "\n\n" +
-		rowDesc.Render("ENTER confirm · ESC cancel")
+	return heading(label, sub) + "\n\n" + m.input.View()
 }
 
 func (m *model) statusBar() string {
@@ -157,49 +309,57 @@ func (m *model) statusBar() string {
 	agents := chipStyle.Render(strings.ReplaceAll(m.agents, " ", " ⋅ "))
 
 	var keys string
-	switch m.screen {
-	case scMenu:
-		keys = key("↑↓", "move") + key("⏎", "select") + key("tab", "scope") + key("q", "quit")
-	case scSources:
-		keys = key("↑↓", "move") + key("⏎", "open") + key("ctrl+r", "rename") + key("esc", "back")
-	case scRename:
-		keys = key("⏎", "save") + key("esc", "cancel")
-	case scSkills:
-		if m.filtering {
-			keys = key("type", "filter") + key("⏎", "list") + key("esc", "clear")
-		} else {
-			keys = key("↑↓", "move") + key("space", "mark") + key("s", "star") + key("/", "filter") + key("a", "all") + key("⏎", "install") + key("esc", "back")
-		}
-	case scStarred:
-		keys = key("↑↓", "move") + key("space", "mark") + key("a", "all") + key("⏎", "install") + key("esc", "menu")
-	case scBrowseResults, scRemove, scPluginRemove:
-		keys = key("↑↓", "move") + key("space", "mark") + key("⏎", "go") + key("esc", "back")
-	case scMarkets:
-		keys = key("↑↓", "move") + key("⏎", "open") + key("ctrl+r", "rename") + key("x", "remove") + key("u", "update") + key("esc", "back")
-	case scPlugins:
-		if m.filtering {
-			keys = key("type", "filter") + key("⏎", "list") + key("esc", "clear")
-		} else {
-			keys = key("↑↓", "move") + key("space", "mark") + key("/", "filter") + key("a", "all") + key("⏎", "install") + key("esc", "back")
-		}
-	case scBrowseInput, scAdd, scAgents:
-		keys = key("⏎", "confirm") + key("esc", "cancel")
-	case scConfirm:
-		keys = key("y", "yes") + key("n", "no")
-	case scResult:
-		keys = key("↑↓", "scroll") + key("esc", "menu")
-	case scRunning:
-		keys = helpDesc.Render("working…")
+	if m.showHelp {
+		keys = key("?", "close") + key("esc", "close")
+	} else {
+		keys = m.compactKeys()
 	}
 
 	left := keys + helpDesc.Render(" │ ") + helpDesc.Render("scope ") + scope
 	right := helpDesc.Render("agents ") + agents
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		// drop the agents chip on narrow terminals
 		return truncate(stripANSI(left), m.width)
 	}
 	return left + strings.Repeat(" ", gap) + right
+}
+
+func (m *model) compactKeys() string {
+	switch m.screen {
+	case scMenu:
+		return key("←→", "section") + key("↑↓", "move") + key("⏎", "select") + key("?", "keys")
+	case scSourceActions:
+		return key("↑↓", "move") + key("⏎", "select") + key("esc", "back") + key("?", "keys")
+	case scSources:
+		return key("↑↓", "move") + key("⏎", "open") + key("esc", "back") + key("?", "keys")
+	case scRename:
+		return key("⏎", "save") + key("esc", "cancel") + key("?", "keys")
+	case scSkills:
+		if m.filtering {
+			return key("type", "filter") + key("⏎", "list") + key("esc", "clear") + key("?", "keys")
+		}
+		return key("↑↓", "move") + key("space", "mark") + key("⏎", "install") + key("?", "keys")
+	case scStarred:
+		return key("↑↓", "move") + key("space", "mark") + key("⏎", "install") + key("?", "keys")
+	case scBrowseResults, scRemove, scPluginRemove:
+		return key("↑↓", "move") + key("space", "mark") + key("⏎", "confirm") + key("?", "keys")
+	case scMarkets:
+		return key("↑↓", "move") + key("⏎", "open") + key("esc", "back") + key("?", "keys")
+	case scPlugins:
+		if m.filtering {
+			return key("type", "filter") + key("⏎", "list") + key("esc", "clear") + key("?", "keys")
+		}
+		return key("↑↓", "move") + key("space", "mark") + key("⏎", "install") + key("?", "keys")
+	case scBrowseInput, scAdd, scAgents:
+		return key("⏎", "confirm") + key("esc", "cancel") + key("?", "keys")
+	case scConfirm:
+		return key("y", "yes") + key("n", "no") + key("?", "keys")
+	case scResult:
+		return key("↑↓", "scroll") + key("esc", "menu") + key("?", "keys")
+	case scRunning:
+		return helpDesc.Render("working…")
+	}
+	return key("?", "keys")
 }
 
 func key(k, d string) string {

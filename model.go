@@ -13,6 +13,7 @@ type screen int
 
 const (
 	scMenu          screen = iota
+	scSourceActions        // source management actions
 	scSources              // install: pick a source
 	scSkills               // install: multi-select skills
 	scStarred              // install: multi-select starred skills
@@ -38,6 +39,11 @@ type menuEntry struct {
 	act   func(m *model) (tea.Model, tea.Cmd)
 }
 
+type menuDomain struct {
+	label   string
+	entries []menuEntry
+}
+
 type model struct {
 	width, height  int
 	innerW, innerH int
@@ -45,12 +51,15 @@ type model struct {
 	screen screen
 	prev   screen
 
-	menu    *picker
-	pick    *picker // active picker for sources/skills/browse/remove
-	input   textinput.Model
-	spin    spinner.Model
-	vp      viewport.Model
-	vpReady bool
+	menu          *picker
+	pick          *picker // active picker for sources/skills/browse/remove
+	domains       []menuDomain
+	domain        int
+	domainCursors []int
+	input         textinput.Model
+	spin          spinner.Model
+	vp            viewport.Model
+	vpReady       bool
 
 	entries []menuEntry
 
@@ -59,6 +68,7 @@ type model struct {
 	curMarket      string   // marketplace being drilled into (scPlugins)
 	renameURL      string   // source whose alias is being edited (scRename)
 	filtering      bool     // true while slash-filtering repo skills/plugins
+	showHelp       bool     // contextual keyboard help overlay
 	addMarketplace bool     // scAdd doubles as the add-marketplace input
 	pendingInstall []string // plugin-install args parked while _codex_hooks runs
 	busyTitle      string
@@ -122,13 +132,9 @@ func newModel() *model {
 		input:  ti,
 		agents: loadAgents(),
 	}
-	m.entries = menuEntries()
-	items := make([]item, len(m.entries))
-	for i, e := range m.entries {
-		// pad the icon to a uniform 2 cells so the titles line up regardless of glyph width
-		items[i] = item{id: e.title, title: padRight(e.icon, 2) + "  " + e.title, desc: e.desc}
-	}
-	m.menu = newPicker(items, false)
+	m.domains = menuDomains()
+	m.domainCursors = make([]int, len(m.domains))
+	m.setDomain(0)
 	return m
 }
 

@@ -2,11 +2,94 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+func TestMenuDisclosesOnlySelectedDescription(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+
+	view := stripANSI(mm.View())
+	if !strings.Contains(view, "pick a source, then swoop specific skills into this folder") {
+		t.Fatal("selected action description is missing")
+	}
+	if strings.Contains(view, "install skills you've starred for quick reuse") {
+		t.Fatal("unselected action description should be hidden")
+	}
+	if !strings.Contains(view, "SKILLS") || !strings.Contains(view, "PLUGINS") || !strings.Contains(view, "SETTINGS") {
+		t.Fatal("domain tabs are missing")
+	}
+}
+
+func TestScreenInstructionsLiveInContextualHelp(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	m.curSource = "owner/repo"
+	m.enterPicker(newPicker([]item{{id: "tdd", title: "tdd"}}, true))
+	m.screen = scSkills
+	m.width, m.height = 96, 30
+	m.layout()
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "SPACE marks") || strings.Contains(view, "/ filters") {
+		t.Fatal("screen heading still repeats shortcut instructions")
+	}
+	status := stripANSI(m.statusBar())
+	if !strings.Contains(status, "? keys") {
+		t.Fatal("compact status bar does not advertise contextual help")
+	}
+	if strings.Contains(status, "s star") || strings.Contains(status, "/ filter") || strings.Contains(status, "a all") {
+		t.Fatal("status bar still exposes secondary shortcuts")
+	}
+}
+
+func TestMenuFitsSupportedTerminalSizes(t *testing.T) {
+	for _, size := range []tea.WindowSizeMsg{
+		{Width: 24, Height: 12},
+		{Width: 40, Height: 14},
+		{Width: 96, Height: 30},
+	} {
+		t.Run(fmt.Sprintf("%dx%d", size.Width, size.Height), func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			m := newModel()
+			var mm tea.Model = m
+			mm, _ = mm.Update(size)
+			view := mm.View()
+			lines := strings.Split(view, "\n")
+			if len(lines) > size.Height {
+				t.Fatalf("rendered %d lines at height %d", len(lines), size.Height)
+			}
+			for i, line := range lines {
+				if got := lipgloss.Width(line); got > size.Width {
+					t.Fatalf("line %d width = %d, want <= %d", i+1, got, size.Width)
+				}
+			}
+		})
+	}
+}
+
+func TestSourceActionsDiscloseOnlySelectedDescription(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	m = mm.(*model)
+	mm, _ = actSourceActions(m)
+
+	view := stripANSI(mm.View())
+	if !strings.Contains(view, "owner/repo · git URL · local path") {
+		t.Fatal("selected source action description is missing")
+	}
+	if strings.Contains(view, "forget one or more saved sources") {
+		t.Fatal("unselected source action description should be hidden")
+	}
+}
 
 // TestRender drives the model without a TTY to prove screens render w/o panic.
 func TestRender(t *testing.T) {

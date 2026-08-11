@@ -6,22 +6,68 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func menuEntries() []menuEntry {
-	return []menuEntry{
-		{"◢◤", "Install skills", "pick a source, then swoop specific skills into this folder", actInstall},
-		{"★", "Starred skills", "install skills you've starred for quick reuse", actStarred},
-		{"⟳", "Update folder", "pull latest from GitHub for skills in the current dir", actUpdateHere},
-		{"⟳⟳", "Update all folders", "refresh every folder you've installed into", actUpdateAll},
-		{"⌖", "Browse skills.sh", "search the directory and remember new sources", actBrowse},
-		{"＋", "Add a source", "owner/repo · git URL · local path", actAdd},
-		{"✕", "Remove a source", "forget a saved source", actRemove},
-		{"⬢", "Install plugins", "pick a marketplace, then install plugins (hooks auto-wire)", actInstallPlugins},
-		{"⊕", "Add a marketplace", "plugin marketplace repo · owner/repo or URL", actAddMarketplace},
-		{"⊖", "Remove plugins", "uninstall plugins from claude + codex", actRemovePlugins},
-		{"⚙", "Default agents", "choose which agents to target", actAgents},
-		{"⤓", "Tidy global skills", "move ~/.claude & ~/.codex skills into the library", actTidy},
-		{"⏻", "Quit", "exit swoop", actQuit},
+func menuDomains() []menuDomain {
+	return []menuDomain{
+		{label: "SKILLS", entries: []menuEntry{
+			{"◢◤", "Install skills", "pick a source, then swoop specific skills into this folder", actInstall},
+			{"★", "Starred skills", "install skills you've starred for quick reuse", actStarred},
+			{"⟳", "Update this folder", "pull latest from GitHub for skills in the current dir", actUpdateHere},
+			{"⟳⟳", "Update every folder", "refresh every folder you've installed into", actUpdateAll},
+			{"⌖", "Browse skills.sh", "search the directory and remember new sources", actBrowse},
+			{"⚙", "Sources…", "add or remove saved skill sources", actSourceActions},
+		}},
+		{label: "PLUGINS", entries: []menuEntry{
+			{"⬢", "Install plugins", "pick a marketplace, then install plugins (hooks auto-wire)", actInstallPlugins},
+			{"⊖", "Remove plugins", "uninstall plugins from claude + codex", actRemovePlugins},
+			{"⊕", "Add a marketplace", "register a plugin marketplace repo", actAddMarketplace},
+			{"⚙", "Marketplaces…", "open, rename, remove, or update saved marketplaces", actInstallPlugins},
+		}},
+		{label: "SETTINGS", entries: []menuEntry{
+			{"⚙", "Default agents", "choose which agents to target", actAgents},
+			{"⤓", "Tidy global skills", "move global Claude and Codex skills into the library", actTidy},
+		}},
 	}
+}
+
+func sourceActionEntries() []menuEntry {
+	return []menuEntry{
+		{"＋", "Add a source", "owner/repo · git URL · local path", actAdd},
+		{"✕", "Remove sources", "forget one or more saved sources", actRemove},
+	}
+}
+
+func menuItems(entries []menuEntry) []item {
+	items := make([]item, len(entries))
+	for i, entry := range entries {
+		items[i] = item{
+			id:    entry.title,
+			title: padRight(entry.icon, 2) + "  " + entry.title,
+		}
+	}
+	return items
+}
+
+func (m *model) setDomain(next int) {
+	if len(m.domains) == 0 {
+		return
+	}
+	if m.menu != nil {
+		m.domainCursors[m.domain] = m.menu.cursor
+	}
+	next = (next%len(m.domains) + len(m.domains)) % len(m.domains)
+	m.domain = next
+	m.entries = m.domains[next].entries
+	m.menu = newPicker(menuItems(m.entries), false)
+	m.menu.cursor = m.domainCursors[next]
+	m.menu.clampWindow()
+	m.menu.setSize(m.innerW, m.innerH-3)
+}
+
+func actSourceActions(m *model) (tea.Model, tea.Cmd) {
+	m.prev = scMenu
+	m.enterPicker(newPicker(menuItems(sourceActionEntries()), false))
+	m.screen = scSourceActions
+	return m, nil
 }
 
 func actStarred(m *model) (tea.Model, tea.Cmd) {
@@ -138,8 +184,6 @@ func actTidy(m *model) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
-
-func actQuit(m *model) (tea.Model, tea.Cmd) { return m, tea.Quit }
 
 // installSelected builds the engine call from the marked skills.
 func (m *model) installSelected() tea.Cmd {

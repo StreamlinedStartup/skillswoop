@@ -66,6 +66,7 @@ Run `swoop` with no arguments for the TUI.
 
 | Key | Action |
 | --- | --- |
+| `←`/`→`, `h`/`l` | switch between Skills, Plugins, and Settings |
 | `↑`/`↓`, `j`/`k` | move |
 | `space` | mark (multi-select) |
 | `a` | mark all / none |
@@ -74,6 +75,7 @@ Run `swoop` with no arguments for the TUI.
 | `enter` | select / confirm |
 | `ctrl+r` | rename a source (set a display alias) |
 | `tab` | toggle project / global scope |
+| `?` | show contextual key help |
 | `esc` | back · `q` quit |
 
 Every action is also available as a non-interactive command:

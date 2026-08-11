@@ -30,7 +30,11 @@ func (m *model) layout() {
 		m.pick.setSize(m.innerW, listH)
 	}
 	if m.menu != nil {
-		m.menu.setSize(m.innerW, listH)
+		menuH := m.innerH - 7
+		if m.innerH < 12 {
+			menuH = m.innerH - 3
+		}
+		m.menu.setSize(m.innerW, menuH)
 	}
 	m.input.Width = m.innerW - 4
 	if m.vpReady {
@@ -225,7 +229,7 @@ func (m *model) activeList() *picker {
 	switch m.screen {
 	case scMenu:
 		return m.menu
-	case scSources, scSkills, scStarred, scBrowseResults, scRemove,
+	case scSourceActions, scSources, scSkills, scStarred, scBrowseResults, scRemove,
 		scMarkets, scPlugins, scPluginRemove:
 		return m.pick
 	}
@@ -266,11 +270,25 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k == "ctrl+c" {
 		return m, tea.Quit
 	}
+	if m.showHelp {
+		if k == "?" || k == "esc" || k == "q" {
+			m.showHelp = false
+		}
+		return m, nil
+	}
+	if k == "?" && m.screen != scRunning {
+		m.showHelp = true
+		return m, nil
+	}
 
 	switch m.screen {
 
 	case scMenu:
 		switch k {
+		case "left", "h":
+			m.setDomain(m.domain - 1)
+		case "right", "l":
+			m.setDomain(m.domain + 1)
 		case "up", "k":
 			m.menu.move(-1)
 		case "down", "j":
@@ -286,6 +304,23 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "enter", " ":
 			return m.entries[m.menu.cursor].act(m)
+		}
+		return m, nil
+
+	case scSourceActions:
+		switch k {
+		case "esc", "q":
+			m.screen = scMenu
+		case "up", "k":
+			m.pick.move(-1)
+		case "down", "j":
+			m.pick.move(1)
+		case "home":
+			m.pick.home()
+		case "end":
+			m.pick.end()
+		case "enter", " ":
+			return sourceActionEntries()[m.pick.cursor].act(m)
 		}
 		return m, nil
 
