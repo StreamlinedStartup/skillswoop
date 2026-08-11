@@ -152,6 +152,10 @@ func TestInstallDestinationFitsSupportedTerminalWidths(t *testing.T) {
 			var mm tea.Model = m
 			mm, _ = mm.Update(size)
 
+			view := stripANSI(mm.View())
+			if !strings.Contains(view, "This project") || !strings.Contains(view, "Globally") {
+				t.Fatalf("destination choices are clipped at %dx%d", size.Width, size.Height)
+			}
 			for i, line := range strings.Split(mm.View(), "\n") {
 				if got := lipgloss.Width(line); got > size.Width {
 					t.Fatalf("line %d width = %d, want <= %d", i+1, got, size.Width)
