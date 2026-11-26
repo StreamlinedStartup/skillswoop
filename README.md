@@ -74,22 +74,24 @@ Run `swoop` with no arguments for the TUI.
 | `/` | fuzzy-filter skills in a repo skill list |
 | `enter` | select / continue / confirm |
 | `ctrl+r` | rename a source (set a display alias) |
-| `tab` | toggle project / global update scope from the main menu |
 | `?` | show contextual key help |
 | `esc` | back · `q` quit |
 
 Skill and plugin installs add a destination confirmation after items are marked.
 Each confirmation starts on **This project**. Choose **Globally** when the same
-install should be available in every project. The main-menu scope indicator only
-controls updates and does not preselect an install destination.
+install should be available in every project.
+
+The main menu has three update actions: **Update this folder** (the current
+project; swoop must know it from an earlier install), **Update global**, and
+**Update everything** (every known project, then global).
 
 Every action is also available as a non-interactive command:
 
 ```sh
 swoop add owner/repo                              # remember a source
 swoop use owner/repo -- --skill A --skill B -y    # install specific skills
-swoop update                                      # update skills in the current folder
-swoop update --all                                # update every folder you've installed into
+swoop update                                      # update skills in the current (known) project
+swoop update --all                                # update every known project, then global skills
 swoop -g update                                   # update global skills
 swoop browse <query>                              # search skills.sh
 swoop stars                                       # list starred skills

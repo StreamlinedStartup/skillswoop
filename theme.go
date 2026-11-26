@@ -35,8 +35,6 @@ var (
 	helpKey     = lipgloss.NewStyle().Foreground(cCyan)
 	helpDesc    = lipgloss.NewStyle().Foreground(cFaint)
 	chipStyle   = lipgloss.NewStyle().Foreground(cYellow)
-	scopeProj   = lipgloss.NewStyle().Foreground(cGreen).Bold(true)
-	scopeGlob   = lipgloss.NewStyle().Foreground(cPink).Bold(true)
 	rowCursor   = lipgloss.NewStyle().Foreground(cText).Bold(true)
 	rowNormal   = lipgloss.NewStyle().Foreground(cCyan2)
 	rowDesc     = lipgloss.NewStyle().Foreground(cFaint)

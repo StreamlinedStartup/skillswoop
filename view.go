@@ -269,7 +269,6 @@ func (m *model) contextKeys() []keyHint {
 			{"← / → · h / l", "change section"},
 			move,
 			{"enter / space", "select action"},
-			{"tab", "toggle update scope"},
 			{"q", "quit"},
 		}
 	case scSourceActions:
@@ -412,10 +411,6 @@ func selectionSummary(req installRequest) string {
 }
 
 func (m *model) statusBar() string {
-	scope := scopeProj.Render("PROJECT")
-	if m.global {
-		scope = scopeGlob.Render("GLOBAL")
-	}
 	agents := chipStyle.Render(strings.ReplaceAll(m.agents, " ", " ⋅ "))
 
 	var keys string
@@ -426,9 +421,6 @@ func (m *model) statusBar() string {
 	}
 
 	left := keys
-	if m.screen == scMenu {
-		left += helpDesc.Render(" │ ") + helpDesc.Render("update scope ") + scope
-	}
 	right := helpDesc.Render("agents ") + agents
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {

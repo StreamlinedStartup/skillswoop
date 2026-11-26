@@ -367,3 +367,134 @@ func writeSkill(t *testing.T, repo, name, desc string) {
 		t.Fatal(err)
 	}
 }
+
+// runUpdate runs the engine in dir with a stub `skills` that records each call.
+func runUpdate(t *testing.T, dir, config string, args ...string) (out string, calls string, err error) {
+	t.Helper()
+	root := t.TempDir()
+	log := filepath.Join(root, "calls")
+	stub := filepath.Join(root, "skills")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", append([]string{filepath.Join(mustGetwd(t), "engine/swoop-core")}, args...)...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"XDG_CONFIG_HOME="+config,
+		"XDG_DATA_HOME="+filepath.Join(root, "data"),
+		"NO_COLOR=1",
+		"SWOOP_SKILLS_CMD="+stub,
+		"PWD="+dir,
+	)
+	b, err := cmd.CombinedOutput()
+	c, _ := os.ReadFile(log)
+	return string(b), string(c), err
+}
+
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func writeProjects(t *testing.T, config string, dirs ...string) {
+	t.Helper()
+	writeJSONFile(t, filepath.Join(config, "swoop", "projects"), strings.Join(dirs, "\n")+"\n")
+}
+
+func TestEngineUpdateUnknownProjectFails(t *testing.T) {
+	config, dir := t.TempDir(), realTempDir(t)
+	writeJSONFile(t, filepath.Join(dir, "skills-lock.json"), "{}")
+	writeProjects(t, config, filepath.Join(dir, "other"))
+
+	out, calls, err := runUpdate(t, dir, config, "update")
+	if err == nil {
+		t.Fatalf("expected non-zero exit:\n%s", out)
+	}
+	if !strings.Contains(out, "swoop does not know this project") {
+		t.Fatalf("missing error message:\n%s", out)
+	}
+	if calls != "" {
+		t.Fatalf("skills was called: %q", calls)
+	}
+}
+
+func TestEngineUpdateKnownProjectRuns(t *testing.T) {
+	config, dir := t.TempDir(), realTempDir(t)
+	writeJSONFile(t, filepath.Join(dir, "skills-lock.json"), "{}")
+	writeProjects(t, config, dir)
+
+	out, calls, err := runUpdate(t, dir, config, "update")
+	if err != nil {
+		t.Fatalf("update failed: %v\n%s", err, out)
+	}
+	if calls != "update -p -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineUpdateAllIncludesGlobal(t *testing.T) {
+	config, root := t.TempDir(), realTempDir(t)
+	withLock := filepath.Join(root, "with-lock")
+	noLock := filepath.Join(root, "no-lock")
+	gone := filepath.Join(root, "gone")
+	writeJSONFile(t, filepath.Join(withLock, "skills-lock.json"), "{}")
+	if err := os.MkdirAll(noLock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeProjects(t, config, withLock, noLock, gone)
+
+	out, calls, err := runUpdate(t, root, config, "update", "--all", "--dry-run")
+	if err != nil {
+		t.Fatalf("update --all failed: %v\n%s", err, out)
+	}
+	if calls != "" {
+		t.Fatalf("dry run called skills: %q", calls)
+	}
+	for _, want := range []string{
+		"updating " + withLock,
+		"skip " + noLock,
+		"dropped " + gone,
+		"updating global skills",
+		"update -g -y",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	reg, _ := os.ReadFile(filepath.Join(config, "swoop", "projects"))
+	if strings.Contains(string(reg), gone) {
+		t.Fatalf("gone dir kept in registry:\n%s", reg)
+	}
+
+	out, calls, err = runUpdate(t, root, config, "update", "--all")
+	if err != nil {
+		t.Fatalf("update --all failed: %v\n%s", err, out)
+	}
+	if calls != "update -p -y\nupdate -g -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineUpdateAllWithoutProjectsStillUpdatesGlobal(t *testing.T) {
+	out, calls, err := runUpdate(t, realTempDir(t), t.TempDir(), "update", "--all")
+	if err != nil {
+		t.Fatalf("update --all failed: %v\n%s", err, out)
+	}
+	if calls != "update -g -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineGlobalUpdateUnchanged(t *testing.T) {
+	out, calls, err := runUpdate(t, realTempDir(t), t.TempDir(), "-g", "update")
+	if err != nil {
+		t.Fatalf("-g update failed: %v\n%s", err, out)
+	}
+	if calls != "update -g -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}

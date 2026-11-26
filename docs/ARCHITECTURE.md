@@ -93,8 +93,9 @@ stateDiagram-v2
     scMenu --> scAdd: "Add a source"
     scMenu --> scRemove: "Remove"
     scMenu --> scAgents: "Default agents"
-    scMenu --> scRunning: "Update here"
-    scMenu --> scRunning: "Update all"
+    scMenu --> scRunning: "Update this folder"
+    scMenu --> scRunning: "Update global"
+    scMenu --> scRunning: "Update everything"
     scMenu --> [*]: "Quit"
 
     scSources --> scRunning: enter source
@@ -164,7 +165,6 @@ type model struct {
     input  textinput.Model
     spin   spinner.Model
     vp     viewport.Model
-    global bool         // project vs global update scope toggle
     install *installRequest // explicit destination choice for marked items
     projectDir string   // absolute current directory shown in destination copy
     curSource string    // source being drilled into
@@ -202,9 +202,9 @@ Layout math lives in `layout()` — calculates `innerW`/`innerH` accounting for 
 - `spin.View()` for the running spinner
 
 `statusBar()` renders a two-column footer with key hints and configured agents.
-Only the main menu adds the labeled update scope. Install selection screens do
-not expose a scope toggle, and `scInstallDestination` renders the project/global
-choice in the panel.
+There is no update scope toggle: the main menu offers separate "Update this
+folder", "Update global", and "Update everything" actions, and
+`scInstallDestination` renders the project/global install choice in the panel.
 
 ### `menu.go` (185 lines)
 

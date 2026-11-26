@@ -96,15 +96,17 @@ func TestInstallDestinationUsesRewrittenChrome(t *testing.T) {
 	}
 }
 
-func TestMenuLabelsScopeAsUpdateOnly(t *testing.T) {
+func TestMenuStatusHasNoUpdateScope(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := newModel()
 	m.width, m.height = 96, 30
 	m.layout()
 
 	status := stripANSI(m.statusBar())
-	if !strings.Contains(status, "update scope PROJECT") {
-		t.Fatalf("menu status does not label update scope: %q", status)
+	for _, gone := range []string{"scope", "PROJECT", "GLOBAL"} {
+		if strings.Contains(status, gone) {
+			t.Fatalf("menu status mentions %q: %q", gone, status)
+		}
 	}
 }
 

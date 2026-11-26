@@ -288,12 +288,9 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			m.menu.move(1)
 		case "home", "g":
-			// 'g' also toggles scope; use only home for top
 			m.menu.home()
 		case "G", "end":
 			m.menu.end()
-		case "tab":
-			m.global = !m.global
 		case "q":
 			return m, tea.Quit
 		case "enter", " ":
