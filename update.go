@@ -80,6 +80,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case skillsMsg:
+		if msg.err == nil && len(msg.items) == 0 && inLibrary(m.curSource) {
+			m.screen = scResult
+			m.resultTitle = "the Library is empty"
+			m.resultErr = false
+			m.setResult("There are no skills in the Library yet.\n\nAdd one with `swoop add <local skill folder>` or move global skills in with Tidy.")
+			return m, nil
+		}
 		if msg.err != nil || len(msg.items) == 0 {
 			m.screen = scResult
 			m.resultTitle = "could not list skills for " + short(m.curSource)

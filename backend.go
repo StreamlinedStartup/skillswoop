@@ -97,7 +97,52 @@ func readLines(path string) []string {
 	return out
 }
 
-func loadSources() []string  { return readLines(filepath.Join(configDir(), "sources")) }
+// libraryDir mirrors the engine's $LIBRARY: the built-in Library source.
+func libraryDir() string {
+	if p := os.Getenv("XDG_DATA_HOME"); p != "" {
+		return filepath.Join(p, "swoop", "library")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share", "swoop", "library")
+}
+
+// inLibrary reports whether src is the Library or a legacy per-skill
+// "library/<name>" source saved by older versions (a direct child holding a
+// SKILL.md, or one since deleted). Deeper paths are ordinary sources.
+func inLibrary(src string) bool {
+	lib, s := libraryDir(), filepath.Clean(src)
+	if s == lib {
+		return true
+	}
+	if filepath.Dir(s) != lib {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(s, "SKILL.md")); err == nil {
+		return true
+	}
+	_, err := os.Stat(s)
+	return os.IsNotExist(err)
+}
+
+// canonSource folds every Library spelling into libraryDir() so a star saved
+// against a legacy library/<name> source is the same star as one on the Library.
+func canonSource(src string) string {
+	if inLibrary(src) {
+		return libraryDir()
+	}
+	return src
+}
+
+// loadSources returns the saved (removable) sources; Library entries are skipped.
+func loadSources() []string {
+	var out []string
+	for _, s := range readLines(filepath.Join(configDir(), "sources")) {
+		if !inLibrary(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 func loadProjects() []string { return readLines(filepath.Join(configDir(), "projects")) }
 
 // ---- friendly source aliases (TUI display only) -------------------------
@@ -141,14 +186,18 @@ func saveAlias(url, name string) error {
 	return os.Rename(tmp, aliasesPath())
 }
 
-// sourceItems builds the install/source list, showing an alias when one is set
-// (with the real repo URL as the dim subtitle). item.id is always the real URL.
+// sourceItems builds the install/source list: the built-in Library first, then
+// saved sources, showing an alias when one is set (with the real repo URL as the
+// dim subtitle). item.id is always the real URL.
 func sourceItems() []item {
 	al := loadAliases()
-	srcs := loadSources()
+	srcs := append([]string{libraryDir()}, loadSources()...)
 	items := make([]item, len(srcs))
 	for i, s := range srcs {
 		it := item{id: s, title: s}
+		if inLibrary(s) {
+			it.title = "Library"
+		}
 		if name, ok := al[s]; ok {
 			it.title = name
 			it.desc = s

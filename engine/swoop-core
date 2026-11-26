@@ -17,7 +17,7 @@
 #   • Default agents           view / change targets
 #
 # Scriptable subcommands (optional):
-#   swoop add <src>...       remember a source (local skills are COPIED in)
+#   swoop add <src>...       remember a source (a local skill is COPIED into the Library)
 #   swoop use <src>...       install from a source now (also `swoop <src>`)
 #   swoop update [skill...]  update this folder (must be a known project)
 #   swoop -g update          update global skills
@@ -139,19 +139,61 @@ run_with_spin() {  # $1 title, rest = command
 
 # ---- helpers ------------------------------------------------------------
 load_agents() { if [ -s "$AGENTS_FILE" ]; then cat "$AGENTS_FILE"; else printf '%s\n' $DEFAULT_AGENTS; fi; }
+# physical absolute form of a local path (symlinks, . and .. resolved), so
+# ./library, ~/… and /var vs /private/var spellings compare equal
+abs_path() {
+  local p="$1"; case "$p" in "~") p="$HOME" ;; "~"/*) p="$HOME/${p:2}" ;; esac
+  case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+  p="${p%/}"
+  if [ -d "$p" ]; then ( cd "$p" && pwd -P )
+  elif [ -d "$(dirname "$p")" ]; then printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd -P)" "$(basename "$p")"
+  else printf '%s\n' "$p"; fi
+}
+# the Library is a built-in source: never saved in $SOURCES, never removable.
+# A legacy per-skill line (library/<name> holding a SKILL.md, or since deleted)
+# counts as the Library; any other path under it is an ordinary source.
+in_library() {
+  is_local "$1" || return 1
+  local p lib; p="$(abs_path "$1")"; lib="$(abs_path "$LIBRARY")"
+  [ "$p" = "$lib" ] && return 0
+  [ "$(dirname "$p")" = "$lib" ] || return 1
+  [ -f "$p/SKILL.md" ] || [ ! -e "$p" ]
+}
+# one spelling per source: any Library spelling becomes $LIBRARY
+canon_src() { if in_library "$1"; then printf '%s\n' "$LIBRARY"; else printf '%s\n' "$1"; fi; }
+# rewrite $STARS so legacy library/<name> stars and Library stars are one star
+canon_stars() {
+  [ -f "$STARS" ] || return 0
+  local tmp src skill desc; tmp="$(mktmp)"
+  while IFS=$'\t' read -r src skill desc || [ -n "$src" ]; do  # keep an unterminated last line
+    [ -n "$src" ] || continue
+    printf '%s\t%s\t%s\n' "$(canon_src "$src")" "$skill" "$desc"
+  done < "$STARS" | awk -F '\t' '!seen[$1 FS $2]++' > "$tmp"
+  mv "$tmp" "$STARS"
+}
+# every source the user can pick: the Library first, then saved sources
+source_list() {
+  printf '%s\n' "$LIBRARY"
+  [ -f "$SOURCES" ] || return 0
+  local s
+  while IFS= read -r s || [ -n "$s" ]; do
+    if [ -z "$s" ] || in_library "$s"; then continue; fi
+    printf '%s\n' "$s"
+  done < "$SOURCES"
+}
 save_source()  { mkdir -p "$CONFIG_DIR"; touch "$SOURCES"; grep -qxF "$1" "$SOURCES" || printf '%s\n' "$1" >> "$SOURCES"; }
 save_project() { mkdir -p "$CONFIG_DIR"; touch "$PROJECTS"; grep -qxF "$1" "$PROJECTS" || printf '%s\n' "$1" >> "$PROJECTS"; }
 save_star() {
-  local src="$1" skill="$2" desc="${3:-}" tmp
-  mkdir -p "$CONFIG_DIR"; touch "$STARS"; tmp="$(mktmp)"
+  local src skill="$2" desc="${3:-}" tmp; src="$(canon_src "$1")"
+  mkdir -p "$CONFIG_DIR"; touch "$STARS"; canon_stars; tmp="$(mktmp)"
   awk -F '\t' -v src="$src" -v skill="$skill" '!(($1==src)&&($2==skill))' "$STARS" > "$tmp" 2>/dev/null || :
   printf '%s\t%s\t%s\n' "$src" "$skill" "$desc" >> "$tmp"
   mv "$tmp" "$STARS"
 }
 remove_star() {
-  local src="$1" skill="$2" tmp
+  local src skill="$2" tmp; src="$(canon_src "$1")"
   [ -f "$STARS" ] || return 0
-  tmp="$(mktmp)"
+  canon_stars; tmp="$(mktmp)"
   awk -F '\t' -v src="$src" -v skill="$skill" '!(($1==src)&&($2==skill))' "$STARS" > "$tmp" 2>/dev/null || :
   mv "$tmp" "$STARS"
 }
@@ -209,7 +251,7 @@ prune_stars_for_sources() {
 }
 is_local() { case "$1" in /*|./*|../*|"~"|"~"/*) return 0 ;; esac; [ -e "$1" ]; }
 resolve_local() {
-  local p="$1"; case "$p" in "~") p="$HOME" ;; "~"/*) p="$HOME/${p#~/}" ;; esac
+  local p="$1"; case "$p" in "~") p="$HOME" ;; "~"/*) p="$HOME/${p:2}" ;; esac
   [ -e "$p" ] || die "path not found: $p"
   if [ -f "$p" ]; then [ "$(basename "$p")" = SKILL.md ] || die "not a SKILL.md or directory: $p"; p="$(dirname "$p")"; fi
   [ -d "$p" ] || die "not a directory: $p"; ( cd "$p" && pwd )
@@ -366,6 +408,7 @@ list_skills_via_api() {
 # list skills in a source as "name<TAB>desc"; nonzero if it cannot
 list_skills_in() {
   local src="$1"
+  if [ "$src" = "$LIBRARY" ]; then mkdir -p "$LIBRARY"; fi   # an empty Library lists nothing, not an error
   if is_local "$src"; then
     local base; base="$(resolve_local "$src" 2>/dev/null)" || return 1
     node -e "$NODE_WALK" "$base"; return 0
@@ -651,27 +694,36 @@ cmd_add() {
       local dir; dir="$(resolve_local "$s")"
       if [ -f "$dir/SKILL.md" ] && [ "$COPY_LOCAL" = 1 ]; then
         local name dst; name="$(basename "$dir")"; dst="$LIBRARY/$name"
-        rm -rf "$dst"; cp -R "$dir" "$dst"; save_source "$dst"
-        printf '  %scopied%s %s -> library, remembered\n' "$GRN" "$RST" "$name"
+        rm -rf "$dst"; cp -R "$dir" "$dst"
+        printf '  %scopied%s %s -> Library\n' "$GRN" "$RST" "$name"
       else save_source "$dir"; printf '  %sremembered%s local path %s\n' "$GRN" "$RST" "$dir"; fi
     else save_source "$s"; printf '  %sremembered%s %s\n' "$GRN" "$RST" "$s"; fi
   done
 }
 
 cmd_remove() {
-  [ -s "$SOURCES" ] || { echo "no saved sources."; return 0; }
   local chosen
   if [ "$#" -ge 1 ]; then chosen="$(printf '%s\n' "$@")"
-  else chosen="$(menu "remove a source" < "$SOURCES")" || true; fi
+  else
+    [ -s "$SOURCES" ] || { echo "no saved sources."; return 0; }
+    chosen="$(source_list | tail -n +2 | menu "remove a source")" || true
+  fi
   [ -n "$chosen" ] || return 0
-  local -a removed=()
-  printf '%s\n' "$chosen" | while IFS= read -r s; do
+  local s rc=0 none=""; local -a removed=()
+  while IFS= read -r s; do
     [ -n "$s" ] || continue
+    if in_library "$s"; then
+      printf '%serror:%s the Library is built in and cannot be removed: %s\n' "$RED" "$RST" "$s" >&2
+      rc=1; continue
+    fi
+    if [ ! -s "$SOURCES" ]; then none=1; continue; fi   # nothing saved: no-op, stars untouched
     grep -vxF "$s" "$SOURCES" > "$SOURCES.tmp" 2>/dev/null || : > "$SOURCES.tmp"
-    mv "$SOURCES.tmp" "$SOURCES"; printf '  removed %s\n' "$s"
-  done
-  while IFS= read -r s; do [ -n "$s" ] && removed+=( "$s" ); done <<< "$chosen"
-  [ "${#removed[@]}" -gt 0 ] && prune_stars_for_sources "${removed[@]}"
+    mv "$SOURCES.tmp" "$SOURCES"
+    printf '  removed %s\n' "$s"; removed+=( "$s" )
+  done <<< "$chosen"
+  if [ -n "$none" ]; then echo "no saved sources."; fi
+  if [ "${#removed[@]}" -gt 0 ]; then prune_stars_for_sources "${removed[@]}"; fi
+  return "$rc"
 }
 
 cmd_agents() {
@@ -684,17 +736,18 @@ cmd_agents() {
 cmd_list() {
   printf '%sAgents%s  %s\n%sScope%s   %s\n\n' "$BOLD" "$RST" "$(load_agents | tr '\n' ' ')" "$BOLD" "$RST" "$SCOPE"
   printf '%sSources%s  %s%s%s\n' "$BOLD" "$RST" "$DIM" "$SOURCES" "$RST"
-  if [ -s "$SOURCES" ]; then while IFS= read -r s; do printf '  %s\n' "$s"; done < "$SOURCES"
-  else printf '  (none — add with the menu or: swoop add <src>)\n'; fi
+  printf '  Library  %s(built in: %s)%s\n' "$DIM" "$LIBRARY" "$RST"
+  source_list | tail -n +2 | while IFS= read -r s; do printf '  %s\n' "$s"; done
 }
 
 cmd_stars() {
+  canon_stars
   if [ -s "$STARS" ]; then cat "$STARS"; else printf 'no starred skills.\n'; fi
 }
 
 cmd_star() {
   [ "$#" -ge 2 ] || die "usage: swoop star <source> <skill>..."
-  local src="$1"; shift
+  local src; src="$(canon_src "$1")"; shift
   local tmp; tmp="$(mktmp)"
   if ! list_skills_in "$src" > "$tmp" 2>"$ERRTO" || [ ! -s "$tmp" ]; then
     rm -f "$tmp"; die "could not list skills for $src"
@@ -858,7 +911,7 @@ cmd_stash() {
     fi
     local dst="$LIBRARY/$nm"
     if [ -e "$dst" ]; then skipped=$((skipped+1)); printf '  %skept%s %s %s(already in library — left in place)%s\n' "$YLW" "$RST" "$nm" "$DIM" "$RST"; continue; fi
-    if mv "$src" "$dst" 2>/dev/null; then save_source "$dst"; moved=$((moved+1)); printf '  %smoved%s %s\n' "$GRN" "$RST" "$nm"
+    if mv "$src" "$dst" 2>/dev/null; then moved=$((moved+1)); printf '  %smoved%s %s\n' "$GRN" "$RST" "$nm"
     else failed=$((failed+1)); printf '  %sfailed%s %s\n' "$RED" "$RST" "$nm"; fi
   done
   printf '%sDone.%s moved %s · unlinked %s · kept %s · failed %s\n' "$GRN" "$RST" "$moved" "$unlinked" "$skipped" "$failed"
@@ -1100,19 +1153,10 @@ cmd_menu() {
   done
 }
 menu_install() {
-  if [ ! -s "$SOURCES" ]; then
-    printf '%sNo saved sources yet — browse or add one first.%s\n' "$YLW" "$RST"
-    if ui_confirm "Browse skills.sh now?"; then cmd_browse; else menu_add; fi; return
-  fi
   # pick ONE source to drill into (single-select: Enter chooses the highlighted row).
-  # auto-pick when there is only one saved source — no point prompting.
-  local n src
-  n="$(awk 'NF{c++} END{print c+0}' "$SOURCES")"
-  if [ "${n:-0}" -le 1 ]; then
-    src="$(awk 'NF{print; exit}' "$SOURCES")"
-  else
-    src="$(menu1 "pick a source  (Enter to choose)" < "$SOURCES")" || true
-  fi
+  # The Library is always the first row.
+  local src
+  src="$(source_list | menu1 "pick a source  (Enter to choose)")" || true
   [ -n "$src" ] || { printf '%sNo source selected.%s\n' "$YLW" "$RST"; return; }
   install_source "$src"
 }
@@ -1174,7 +1218,7 @@ case "$cmd" in
                    list_skills_in "${ARGS[0]}" ;;                 # prints name<TAB>desc
   _search)         have node || exit 3
                    node -e "$NODE_SEARCH" "${ARGS[*]:-}" ;;       # prints source<TAB>name<TAB>installs
-  _sources)        [ -s "$SOURCES" ] && cat "$SOURCES" || true ;;
+  _sources)        source_list ;;                                 # Library first, then saved sources
   _projects)       [ -s "$PROJECTS" ] && cat "$PROJECTS" || true ;;
   _mkts)           [ -s "$MARKETPLACES" ] && cat "$MARKETPLACES" || true ;;
   _plugins)        [ "${#ARGS[@]}" -ge 1 ] || die "usage: swoop _plugins <source>"

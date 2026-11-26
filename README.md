@@ -89,6 +89,7 @@ Every action is also available as a non-interactive command:
 
 ```sh
 swoop add owner/repo                              # remember a source
+swoop add ~/path/to/my-skill                      # copy a local skill into the Library
 swoop use owner/repo -- --skill A --skill B -y    # install specific skills
 swoop update                                      # update skills in the current (known) project
 swoop update --all                                # update every known project, then global skills
@@ -100,6 +101,8 @@ swoop unstar owner/repo tdd                       # remove starred skills
 swoop list | swoop remove | swoop agents claude-code codex
 swoop --version
 ```
+
+The Library is a built-in source: it is always the first source, lists every skill in `~/.local/share/swoop/library/`, and cannot be removed (`swoop remove` refuses it).
 
 ## Plugins
 
@@ -132,7 +135,7 @@ via the `skills-lock.json` that `npx skills` writes.
 ## Files
 
 - Config: `~/.config/swoop/` — `sources`, `agents`, `projects`, `aliases`, `stars`, `marketplaces`
-- Library (skills moved out by `swoop stash`): `~/.local/share/swoop/library/`
+- Library (built-in source that cannot be removed; holds skills copied by `swoop add <local skill>` or moved by `swoop stash`): `~/.local/share/swoop/library/`
 - Engine cache: `~/Library/Caches/swoop/` (macOS) or `$XDG_CACHE_HOME/swoop/`
 
 Existing `~/.config/ccskill` configuration is copied to `~/.config/swoop` on first run.

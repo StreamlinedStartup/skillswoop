@@ -24,22 +24,22 @@ swoop-core <subcommand> [args] # non-interactive, driven by the TUI or CLI
 | Command | Signature | What it does |
 |---------|-----------|--------------|
 | `menu` | (no args) | Interactive home screen. Loops until "Quit". |
-| `add` | `add <source>...` | Remember one or more sources. Local paths get copied into the library. |
+| `add` | `add <source>...` | Remember one or more sources. A local skill folder is copied into the Library (no new source is saved); other local paths are remembered as sources. |
 | `use` | `use <source>... [-- args]` | Install skills from a source. Without `--`, shows an interactive picker. With `-- --skill X --skill Y -y`, installs specific skills non-interactively. |
 | `update` | `update [--all] [skill...]` | Refresh installed skills from GitHub. `--all` walks every known project dir. |
 | `browse` | `browse [query]` | Search skills.sh. Shows results, lets you remember/install repos. |
 | `stars` | (no args) | Print starred skills as `source<TAB>skill<TAB>description`. |
 | `star` | `star <source> <skill>...` | Validate and remember source/skill pairs for quick reuse. |
 | `unstar` | `unstar <source> <skill>...` | Remove starred source/skill pairs. |
-| `list` | (no args) | Print saved sources, agents, and scope. |
-| `remove` | `remove [source]...` | Remove saved sources. Interactive picker if no args. |
+| `list` | (no args) | Print agents, scope, the Library, and saved sources. |
+| `remove` | `remove [source]...` | Remove saved sources. Interactive picker if no args. The Library is built in: naming it prints an error and exits non-zero; other sources in the same call are still removed. |
 | `agents` | `agents [name]...` | Print or set default target agents. Default: `claude-code codex`. |
-| `stash` | (no args) | Move global skills out of `~/.claude/skills` etc. into the library. One-time declutter. |
+| `stash` | (no args) | Move global skills out of `~/.claude/skills` etc. into the Library (no new source is saved). One-time declutter. |
 | `mkt` | `mkt add <source>... \| list \| remove <source>... \| update` | Manage plugin marketplaces. `add` detects which manifest format(s) a repo provides, registers it with each compatible agent's native CLI (`claude plugin marketplace add` / `codex plugin marketplace add`), warns about skipped agents, and caches the marketplace names. `update` runs `claude plugin marketplace update` + `codex plugin marketplace upgrade`. |
 | `plugin` | `plugin install <source> <plugin>... \| list \| remove <plugin[@marketplace]>...` | Install/list/remove plugins via the native CLIs. Unknown source on install offers `mkt add` first. |
 | `_skills` | `_skills <source>` | Machine-readable: print `name<TAB>desc` for each skill in a source. Used by the TUI. |
 | `_search` | `_search [query]` | Machine-readable: search skills.sh, print `source<TAB>name<TAB>installs`. Used by the TUI. |
-| `_sources` | `_sources` | Machine-readable: print saved sources. (Engine has it; TUI reads the file directly instead.) |
+| `_sources` | `_sources` | Machine-readable: print the Library path first, then saved sources (legacy `library/<name>` lines are hidden). (TUI builds the same list itself in `sourceItems()`.) |
 | `_projects` | `_projects` | Machine-readable: print known project dirs. (Engine has it; TUI reads the file directly instead.) |
 | `_mkts` | `_mkts` | Machine-readable: dump the marketplaces file. (Engine has it; TUI reads the file directly instead.) |
 | `_plugins` | `_plugins <source>` | Machine-readable: print an `@marketplace<TAB>claude_name<TAB>codex_name` header, then `name<TAB>desc<TAB>flags<TAB>relpath` per plugin (flags: `claude,codex,hooks,mcp,commands,agents,skills`; relpath = repo-local plugin dir, empty for external sources). Used by the TUI. |
@@ -73,7 +73,8 @@ Aliases: `save`=`add`, `install`=`use`, `upgrade`=`update`, `rm`=`remove`, `ls`=
                    empty column = that format is absent from the repo)
 
 ~/.local/share/swoop/
-  library/         Skills copied here by `add` (local) or `stash` (global tidy)
+  library/         The Library: a built-in source that cannot be removed. Skills
+                   copied here by `add` (local) or `stash` (global tidy)
 
 <project>/
   skills-lock.json Written by `npx skills` — tracks what's installed + source hashes

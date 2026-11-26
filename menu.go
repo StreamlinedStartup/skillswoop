@@ -322,6 +322,9 @@ func installGroupedCmd(title string, global bool, items []item) tea.Cmd {
 }
 
 func short(src string) string {
+	if inLibrary(src) {
+		return "Library"
+	}
 	s := strings.TrimSuffix(src, ".git")
 	if i := strings.LastIndex(s, "github.com"); i >= 0 {
 		s = strings.TrimLeft(s[i+len("github.com"):], ":/")
