@@ -73,7 +73,7 @@ Run `swoop` with no arguments for the TUI.
 | `s` | star / unstar the highlighted skill in a repo skill list |
 | `/` | fuzzy-filter skills in a repo skill list |
 | `enter` | select / continue / confirm |
-| `ctrl+r` | rename a source (set a display alias) |
+| `ctrl+r` | set an alias (display name) for a source or marketplace |
 | `?` | show contextual key help |
 | `esc` | back · `q` quit |
 
