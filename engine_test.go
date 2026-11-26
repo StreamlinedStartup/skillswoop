@@ -374,15 +374,22 @@ func runUpdate(t *testing.T, dir, config string, args ...string) (out string, ca
 	return runUpdateWith(t, dir, config, "", nil, args...)
 }
 
-// runUpdateWith is runUpdate with extra stub script lines (run after logging)
-// and extra environment.
-func runUpdateWith(t *testing.T, dir, config, stubTail string, env []string, args ...string) (out string, calls string, err error) {
+// runUpdateWith is runUpdate with extra lines for the skills stub (run after
+// logging) and extra stub executables. Stubs live on PATH and find their files
+// through $SWOOP_TEST_DIR, so paths with spaces stay intact.
+func runUpdateWith(t *testing.T, dir, config, skillsTail string, stubs map[string]string, args ...string) (out string, calls string, err error) {
 	t.Helper()
 	root := t.TempDir()
-	log := filepath.Join(root, "calls")
-	stub := filepath.Join(root, "skills")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"+stubTail), 0o755); err != nil {
-		t.Fatal(err)
+	bin := filepath.Join(root, "bin")
+	all := map[string]string{"swoop-test-skills": "#!/bin/sh\necho \"$*\" >> \"$SWOOP_TEST_DIR/calls\"\n" + skillsTail}
+	for name, body := range stubs {
+		all[name] = body
+	}
+	for name, body := range all {
+		writeJSONFile(t, filepath.Join(bin, name), body)
+		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cmd := exec.Command("bash", append([]string{filepath.Join(mustGetwd(t), "engine/swoop-core")}, args...)...)
 	cmd.Dir = dir
@@ -390,12 +397,13 @@ func runUpdateWith(t *testing.T, dir, config, stubTail string, env []string, arg
 		"XDG_CONFIG_HOME="+config,
 		"XDG_DATA_HOME="+filepath.Join(root, "data"),
 		"NO_COLOR=1",
-		"SWOOP_SKILLS_CMD="+stub,
+		"SWOOP_SKILLS_CMD=swoop-test-skills",
+		"SWOOP_TEST_DIR="+root,
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"PWD="+dir,
 	)
-	cmd.Env = append(cmd.Env, env...)
 	b, err := cmd.CombinedOutput()
-	c, _ := os.ReadFile(log)
+	c, _ := os.ReadFile(filepath.Join(root, "calls"))
 	return string(b), string(c), err
 }
 
@@ -521,17 +529,16 @@ func TestEngineUpdateAllFailsWhenGlobalFails(t *testing.T) {
 }
 
 func TestEngineMenuUpdateThisFolderIgnoresGlobalFlag(t *testing.T) {
-	root := t.TempDir()
-	bin := filepath.Join(root, "bin")
-	// stub gum: pick "Update this folder" once, then quit the menu
-	gum := "#!/bin/sh\n[ \"$1\" = choose ] || exit 1\n[ -f " + root + "/picked ] && exit 1\ntouch " + root + "/picked\ngrep '^Update this folder'\n"
-	writeJSONFile(t, filepath.Join(bin, "gum"), gum)
-	if err := os.Chmod(filepath.Join(bin, "gum"), 0o755); err != nil {
+	// a space in TMPDIR must not break the stubs (the menu would loop forever)
+	tmp := filepath.Join(t.TempDir(), "tmp dir")
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+	t.Setenv("TMPDIR", tmp)
+	// stub gum: pick "Update this folder" once, then quit the menu
+	gum := "#!/bin/sh\n[ \"$1\" = choose ] || exit 1\n[ -f \"$SWOOP_TEST_DIR/picked\" ] && exit 1\ntouch \"$SWOOP_TEST_DIR/picked\"\ngrep '^Update this folder'\n"
 
-	out, calls, err := runUpdateWith(t, realTempDir(t), t.TempDir(), "", env, "-g", "menu")
+	out, calls, err := runUpdateWith(t, realTempDir(t), t.TempDir(), "", map[string]string{"gum": gum}, "-g", "menu")
 	if err != nil {
 		t.Fatalf("menu failed: %v\n%s", err, out)
 	}
