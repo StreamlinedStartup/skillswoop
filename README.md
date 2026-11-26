@@ -142,6 +142,10 @@ TUI with a Bash engine embedded via `go:embed`. On first run the engine is writt
 cache directory and executed; it orchestrates `npx skills`, `gh`/`git`, and Node. Any
 command-line arguments are passed straight through to the engine.
 
+## Domain model
+
+Shared vocabulary lives in [GLOSSARY.md](GLOSSARY.md); design decisions are recorded in [docs/adr/](docs/adr/).
+
 ## License
 
 [MIT](LICENSE)
