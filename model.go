@@ -78,7 +78,6 @@ type model struct {
 	vp            viewport.Model
 	vpReady       bool
 
-	global         bool // update scope toggle (project default)
 	install        *installRequest
 	projectDir     string
 	curSource      string          // source being drilled into

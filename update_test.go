@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -51,18 +53,61 @@ func TestMenuDomainNavigationRemembersEachCursor(t *testing.T) {
 	}
 }
 
-func TestMenuTabStillTogglesScope(t *testing.T) {
+func TestMenuTabDoesNothing(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := newModel()
 	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	before := stripANSI(mm.View())
 
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	mm, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = mm.(*model)
-	if !m.global {
-		t.Fatal("tab did not enable global scope")
+	if cmd != nil {
+		t.Fatal("tab returned a command")
 	}
-	if m.domain != 0 {
-		t.Fatalf("tab changed domain to %d", m.domain)
+	if m.screen != scMenu || m.domain != 0 || m.menu.cursor != 0 {
+		t.Fatalf("tab changed menu state to (%d, %d, %d)", m.screen, m.domain, m.menu.cursor)
+	}
+	if after := stripANSI(m.View()); after != before {
+		t.Fatalf("tab changed the view:\n%s", after)
+	}
+}
+
+func TestMenuUpdateEntriesRunTheirCommands(t *testing.T) {
+	stub := filepath.Join(t.TempDir(), "swoop-core")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"args: $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SWOOP_CORE", stub)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	want := []struct{ title, args string }{
+		{"Update this folder", "args: update"},
+		{"Update global", "args: -g update"},
+		{"Update everything", "args: update --all"},
+	}
+	var got []menuEntry
+	for _, e := range menuDomains()[0].entries {
+		if strings.HasPrefix(e.title, "Update") {
+			got = append(got, e)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("skills section has %d update entries, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].title != w.title {
+			t.Fatalf("update entry %d = %q, want %q", i, got[i].title, w.title)
+		}
+		m := newModel()
+		_, cmd := got[i].act(m)
+		if m.screen != scRunning {
+			t.Fatalf("%s did not start running", w.title)
+		}
+		msg, ok := cmd().(opDoneMsg)
+		if !ok || msg.err != nil || strings.TrimSpace(msg.output) != w.args {
+			t.Fatalf("%s ran %q (err %v), want %q", w.title, msg.output, msg.err, w.args)
+		}
 	}
 }
 
@@ -78,9 +123,14 @@ func TestQuestionMarkOpensAndEscapeClosesContextualHelp(t *testing.T) {
 		t.Fatal("question mark did not open help")
 	}
 	view := stripANSI(m.View())
-	for _, want := range []string{"KEYS · SKILLS", "change section", "toggle update scope", "quit"} {
+	for _, want := range []string{"KEYS · SKILLS", "change section", "quit"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("help view missing %q", want)
+		}
+	}
+	for _, gone := range []string{"update scope", "PROJECT", "GLOBAL"} {
+		if strings.Contains(view, gone) {
+			t.Fatalf("help view still mentions %q", gone)
 		}
 	}
 
@@ -129,7 +179,6 @@ func TestInstallSelectionsOpenProjectDestination(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 			m := newModel()
-			m.global = true
 			m.screen = tt.screen
 			m.curSource = "stale/source"
 			if tt.screen == scSkills {
@@ -313,11 +362,11 @@ func TestTabDoesNothingInInstallFlowScreens(t *testing.T) {
 			m.screen = screen
 			m.enterPicker(newPicker([]item{{id: "one", title: "one"}}, screen == scSkills || screen == scStarred || screen == scPlugins))
 
-			mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+			mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 			m = mm.(*model)
 
-			if m.global {
-				t.Fatalf("tab enabled update scope on screen %d", screen)
+			if cmd != nil || m.screen != screen || m.install != nil {
+				t.Fatalf("tab changed state on screen %d", screen)
 			}
 		})
 	}
@@ -329,7 +378,7 @@ func TestSourcesActionOpensManagementMenu(t *testing.T) {
 	var mm tea.Model = m
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 6; i++ {
 		mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})

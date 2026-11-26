@@ -367,3 +367,185 @@ func writeSkill(t *testing.T, repo, name, desc string) {
 		t.Fatal(err)
 	}
 }
+
+// runUpdate runs the engine in dir with a stub `skills` that records each call.
+func runUpdate(t *testing.T, dir, config string, args ...string) (out string, calls string, err error) {
+	t.Helper()
+	return runUpdateWith(t, dir, config, "", nil, args...)
+}
+
+// runUpdateWith is runUpdate with extra lines for the skills stub (run after
+// logging) and extra stub executables. Stubs live on PATH and find their files
+// through $SWOOP_TEST_DIR, so paths with spaces stay intact.
+func runUpdateWith(t *testing.T, dir, config, skillsTail string, stubs map[string]string, args ...string) (out string, calls string, err error) {
+	t.Helper()
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	all := map[string]string{"swoop-test-skills": "#!/bin/sh\necho \"$*\" >> \"$SWOOP_TEST_DIR/calls\"\n" + skillsTail}
+	for name, body := range stubs {
+		all[name] = body
+	}
+	for name, body := range all {
+		writeJSONFile(t, filepath.Join(bin, name), body)
+		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", append([]string{filepath.Join(mustGetwd(t), "engine/swoop-core")}, args...)...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"XDG_CONFIG_HOME="+config,
+		"XDG_DATA_HOME="+filepath.Join(root, "data"),
+		"NO_COLOR=1",
+		"SWOOP_SKILLS_CMD=swoop-test-skills",
+		"SWOOP_TEST_DIR="+root,
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PWD="+dir,
+	)
+	b, err := cmd.CombinedOutput()
+	c, _ := os.ReadFile(filepath.Join(root, "calls"))
+	return string(b), string(c), err
+}
+
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func writeProjects(t *testing.T, config string, dirs ...string) {
+	t.Helper()
+	writeJSONFile(t, filepath.Join(config, "swoop", "projects"), strings.Join(dirs, "\n")+"\n")
+}
+
+func TestEngineUpdateUnknownProjectFails(t *testing.T) {
+	config, dir := t.TempDir(), realTempDir(t)
+	writeJSONFile(t, filepath.Join(dir, "skills-lock.json"), "{}")
+	writeProjects(t, config, filepath.Join(dir, "other"))
+
+	out, calls, err := runUpdate(t, dir, config, "update")
+	if err == nil {
+		t.Fatalf("expected non-zero exit:\n%s", out)
+	}
+	if !strings.Contains(out, "swoop does not know this project") {
+		t.Fatalf("missing error message:\n%s", out)
+	}
+	if calls != "" {
+		t.Fatalf("skills was called: %q", calls)
+	}
+}
+
+func TestEngineUpdateKnownProjectRuns(t *testing.T) {
+	config, dir := t.TempDir(), realTempDir(t)
+	writeJSONFile(t, filepath.Join(dir, "skills-lock.json"), "{}")
+	writeProjects(t, config, dir)
+
+	out, calls, err := runUpdate(t, dir, config, "update")
+	if err != nil {
+		t.Fatalf("update failed: %v\n%s", err, out)
+	}
+	if calls != "update -p -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineUpdateAllIncludesGlobal(t *testing.T) {
+	config, root := t.TempDir(), realTempDir(t)
+	withLock := filepath.Join(root, "with-lock")
+	noLock := filepath.Join(root, "no-lock")
+	gone := filepath.Join(root, "gone")
+	writeJSONFile(t, filepath.Join(withLock, "skills-lock.json"), "{}")
+	if err := os.MkdirAll(noLock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeProjects(t, config, withLock, noLock, gone)
+
+	out, calls, err := runUpdate(t, root, config, "update", "--all", "--dry-run")
+	if err != nil {
+		t.Fatalf("update --all failed: %v\n%s", err, out)
+	}
+	if calls != "" {
+		t.Fatalf("dry run called skills: %q", calls)
+	}
+	for _, want := range []string{
+		"updating " + withLock,
+		"skip " + noLock,
+		"dropped " + gone,
+		"updating global skills",
+		"update -g -y",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	reg, _ := os.ReadFile(filepath.Join(config, "swoop", "projects"))
+	if strings.Contains(string(reg), gone) {
+		t.Fatalf("gone dir kept in registry:\n%s", reg)
+	}
+
+	out, calls, err = runUpdate(t, root, config, "update", "--all")
+	if err != nil {
+		t.Fatalf("update --all failed: %v\n%s", err, out)
+	}
+	if calls != "update -p -y\nupdate -g -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineUpdateAllWithoutProjectsStillUpdatesGlobal(t *testing.T) {
+	out, calls, err := runUpdate(t, realTempDir(t), t.TempDir(), "update", "--all")
+	if err != nil {
+		t.Fatalf("update --all failed: %v\n%s", err, out)
+	}
+	if calls != "update -g -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineGlobalUpdateUnchanged(t *testing.T) {
+	out, calls, err := runUpdate(t, realTempDir(t), t.TempDir(), "-g", "update")
+	if err != nil {
+		t.Fatalf("-g update failed: %v\n%s", err, out)
+	}
+	if calls != "update -g -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineUpdateAllFailsWhenGlobalFails(t *testing.T) {
+	out, calls, err := runUpdateWith(t, realTempDir(t), t.TempDir(), "exit 3\n", nil, "update", "--all")
+	if err == nil {
+		t.Fatalf("expected non-zero exit:\n%s", out)
+	}
+	if !strings.Contains(out, "failed global skills") {
+		t.Fatalf("missing failure line:\n%s", out)
+	}
+	if calls != "update -g -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineMenuUpdateThisFolderIgnoresGlobalFlag(t *testing.T) {
+	// a space in TMPDIR must not break the stubs (the menu would loop forever)
+	tmp := filepath.Join(t.TempDir(), "tmp dir")
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", tmp)
+	// stub gum: pick "Update this folder" once, then quit the menu
+	gum := "#!/bin/sh\n[ \"$1\" = choose ] || exit 1\n[ -f \"$SWOOP_TEST_DIR/picked\" ] && exit 1\ntouch \"$SWOOP_TEST_DIR/picked\"\ngrep '^Update this folder'\n"
+
+	out, calls, err := runUpdateWith(t, realTempDir(t), t.TempDir(), "", map[string]string{"gum": gum}, "-g", "menu")
+	if err != nil {
+		t.Fatalf("menu failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "swoop does not know this project") {
+		t.Fatalf("missing unknown-project error:\n%s", out)
+	}
+	if calls != "" {
+		t.Fatalf("skills was called: %q", calls)
+	}
+}

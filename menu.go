@@ -11,8 +11,9 @@ func menuDomains() []menuDomain {
 		{label: "SKILLS", entries: []menuEntry{
 			{"◢◤", "Install skills", "pick a source and skills, then choose where to install", actInstall},
 			{"★", "Starred skills", "install skills you've starred for quick reuse", actStarred},
-			{"⟳", "Update this folder", "pull latest from GitHub for skills in the current dir", actUpdateHere},
-			{"⟳⟳", "Update every folder", "refresh every folder you've installed into", actUpdateAll},
+			{"⟳", "Update this folder", "pull latest from GitHub for skills in the current project", actUpdateHere},
+			{"⟳", "Update global", "pull latest from GitHub for skills installed globally", actUpdateGlobal},
+			{"⟳⟳", "Update everything", "refresh every known project and the global skills", actUpdateAll},
 			{"⌖", "Browse skills.sh", "search the directory and remember new sources", actBrowse},
 			{"⚙", "Sources…", "add or remove saved skill sources", actSourceActions},
 		}},
@@ -94,16 +95,19 @@ func actInstall(m *model) (tea.Model, tea.Cmd) {
 func actUpdateHere(m *model) (tea.Model, tea.Cmd) {
 	m.busyTitle = "updating skills in this folder"
 	m.screen = scRunning
-	if m.global {
-		return m, opCmd("update (global)", "-g", "update")
-	}
 	return m, opCmd("update (this folder)", "update")
 }
 
-func actUpdateAll(m *model) (tea.Model, tea.Cmd) {
-	m.busyTitle = "updating every known folder"
+func actUpdateGlobal(m *model) (tea.Model, tea.Cmd) {
+	m.busyTitle = "updating global skills"
 	m.screen = scRunning
-	return m, opCmd("update --all", "update", "--all")
+	return m, opCmd("update (global)", "-g", "update")
+}
+
+func actUpdateAll(m *model) (tea.Model, tea.Cmd) {
+	m.busyTitle = "updating every project and global skills"
+	m.screen = scRunning
+	return m, opCmd("update (everything)", "update", "--all")
 }
 
 func actBrowse(m *model) (tea.Model, tea.Cmd) {

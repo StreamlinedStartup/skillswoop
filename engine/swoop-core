@@ -19,8 +19,9 @@
 # Scriptable subcommands (optional):
 #   swoop add <src>...       remember a source (local skills are COPIED in)
 #   swoop use <src>...       install from a source now (also `swoop <src>`)
-#   swoop update [skill...]  pull latest from GitHub for skills in this folder (-g for global)
-#   swoop update --all       refresh every folder you've installed into
+#   swoop update [skill...]  update this folder (must be a known project)
+#   swoop -g update          update global skills
+#   swoop update --all       update everything: every known project, then global
 #   swoop browse [query]     search skills.sh
 #   swoop stars              list starred source/skill pairs
 #   swoop star <src> <skill> remember skills for quick reuse
@@ -735,6 +736,9 @@ cmd_update() {
   if [ "$SCOPE" = global ]; then cmd+=( -g ); else cmd+=( -p ); fi
   cmd+=( -y )
   for a in "$@"; do [ "$a" = --all ] || [ "$a" = all ] || cmd+=( "$a" ); done   # optional skill names
+  if [ "$SCOPE" != global ] && ! { [ -f "$PROJECTS" ] && grep -qxF "$PWD" "$PROJECTS"; }; then
+    die "swoop does not know this project"
+  fi
   if [ "$SCOPE" != global ] && [ ! -f skills-lock.json ]; then
     printf '%sNo skills-lock.json here — nothing installed in %s to update.%s\n' "$YLW" "$PWD" "$RST" >&2
     printf '%s(cd into a project where you installed skills, run `swoop update --all`, or use -g.)%s\n' "$DIM" "$RST" >&2
@@ -746,12 +750,18 @@ cmd_update() {
 }
 
 # update every known project dir (recorded at install time), pruning ones that are
-# gone or no longer hold a skills-lock.json so the registry stays honest.
+# gone or no longer hold a skills-lock.json so the registry stays honest, then the
+# global skills. A failed project does not stop the rest.
 update_all() {
-  if [ ! -s "$PROJECTS" ]; then
-    printf '%sNo known project dirs yet — install something first, then `swoop update --all`.%s\n' "$YLW" "$RST" >&2
-    return 0
-  fi
+  if [ -s "$PROJECTS" ]; then update_projects
+  else printf '%sNo known project dirs yet.%s\n' "$YLW" "$RST" >&2; fi
+  printf '%s>>%s updating global skills\n' "$BOLD" "$RST"
+  local rc=0
+  run_skills "${SKILLS_CMD[@]}" update -g -y || { rc=$?; printf '  %sfailed%s global skills\n' "$RED" "$RST"; }
+  return "$rc"
+}
+
+update_projects() {
   # slurp the registry FIRST — running `skills update` inside a `while read < file`
   # loop lets it consume the file's remaining lines from stdin (eating other dirs).
   local dir kept=0 done=0; local -a dirs=() keep=()
@@ -1065,8 +1075,9 @@ cmd_menu() {
     local action
     action="$(printf '%s\n' \
       "Install skills    (pick a source, then pick skills)" \
-      "Update skills     (pull latest from GitHub into this folder)" \
-      "Update all folders (refresh every folder you've installed into)" \
+      "Update this folder (skills in the current project)" \
+      "Update global     (skills installed globally)" \
+      "Update everything (every known project, then global)" \
       "Browse skills.sh  (discover & remember new sources)" \
       "Add a source      (repo, URL, or local path)" \
       "Remove a source" \
@@ -1075,8 +1086,9 @@ cmd_menu() {
       "Quit" | menu1 "swoop")" || return 0
     case "$action" in
       "Install skills"*)   menu_install ;;
-      "Update all folders"*) update_all ;;
-      "Update skills"*)    cmd_update ;;
+      "Update this folder"*) ( SCOPE=project; cmd_update ) || true ;;
+      "Update global"*)    ( SCOPE=global; cmd_update ) || true ;;
+      "Update everything"*) update_all || true ;;
       "Browse skills.sh"*) cmd_browse ;;
       "Add a source"*)     menu_add ;;
       "Remove a source"*)  cmd_remove ;;
@@ -1116,7 +1128,7 @@ menu_agents() {
   cmd_agents $line
 }
 
-usage() { sed -n '3,41p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; }
+usage() { sed -n '3,38p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; }
 
 # ---- arg parsing --------------------------------------------------------
 [ -n "${SWOOP_SKILLS_CMD:-}" ] && read -r -a SKILLS_CMD <<< "$SWOOP_SKILLS_CMD"
