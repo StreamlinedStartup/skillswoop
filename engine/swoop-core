@@ -756,7 +756,9 @@ update_all() {
   if [ -s "$PROJECTS" ]; then update_projects
   else printf '%sNo known project dirs yet.%s\n' "$YLW" "$RST" >&2; fi
   printf '%s>>%s updating global skills\n' "$BOLD" "$RST"
-  run_skills "${SKILLS_CMD[@]}" update -g -y || printf '  %sfailed%s global skills\n' "$RED" "$RST"
+  local rc=0
+  run_skills "${SKILLS_CMD[@]}" update -g -y || { rc=$?; printf '  %sfailed%s global skills\n' "$RED" "$RST"; }
+  return "$rc"
 }
 
 update_projects() {
@@ -1084,9 +1086,9 @@ cmd_menu() {
       "Quit" | menu1 "swoop")" || return 0
     case "$action" in
       "Install skills"*)   menu_install ;;
-      "Update this folder"*) ( cmd_update ) || true ;;
+      "Update this folder"*) ( SCOPE=project; cmd_update ) || true ;;
       "Update global"*)    ( SCOPE=global; cmd_update ) || true ;;
-      "Update everything"*) update_all ;;
+      "Update everything"*) update_all || true ;;
       "Browse skills.sh"*) cmd_browse ;;
       "Add a source"*)     menu_add ;;
       "Remove a source"*)  cmd_remove ;;

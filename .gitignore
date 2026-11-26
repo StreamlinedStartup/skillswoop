@@ -1,6 +1,7 @@
 # build artifacts
 /dist/
 /swoop
+/skillswoop
 /swoop-*
 *.test
 *.out

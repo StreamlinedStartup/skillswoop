@@ -371,10 +371,17 @@ func writeSkill(t *testing.T, repo, name, desc string) {
 // runUpdate runs the engine in dir with a stub `skills` that records each call.
 func runUpdate(t *testing.T, dir, config string, args ...string) (out string, calls string, err error) {
 	t.Helper()
+	return runUpdateWith(t, dir, config, "", nil, args...)
+}
+
+// runUpdateWith is runUpdate with extra stub script lines (run after logging)
+// and extra environment.
+func runUpdateWith(t *testing.T, dir, config, stubTail string, env []string, args ...string) (out string, calls string, err error) {
+	t.Helper()
 	root := t.TempDir()
 	log := filepath.Join(root, "calls")
 	stub := filepath.Join(root, "skills")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"$*\" >> "+log+"\n"+stubTail), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", append([]string{filepath.Join(mustGetwd(t), "engine/swoop-core")}, args...)...)
@@ -386,6 +393,7 @@ func runUpdate(t *testing.T, dir, config string, args ...string) (out string, ca
 		"SWOOP_SKILLS_CMD="+stub,
 		"PWD="+dir,
 	)
+	cmd.Env = append(cmd.Env, env...)
 	b, err := cmd.CombinedOutput()
 	c, _ := os.ReadFile(log)
 	return string(b), string(c), err
@@ -496,5 +504,41 @@ func TestEngineGlobalUpdateUnchanged(t *testing.T) {
 	}
 	if calls != "update -g -y\n" {
 		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineUpdateAllFailsWhenGlobalFails(t *testing.T) {
+	out, calls, err := runUpdateWith(t, realTempDir(t), t.TempDir(), "exit 3\n", nil, "update", "--all")
+	if err == nil {
+		t.Fatalf("expected non-zero exit:\n%s", out)
+	}
+	if !strings.Contains(out, "failed global skills") {
+		t.Fatalf("missing failure line:\n%s", out)
+	}
+	if calls != "update -g -y\n" {
+		t.Fatalf("calls = %q", calls)
+	}
+}
+
+func TestEngineMenuUpdateThisFolderIgnoresGlobalFlag(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	// stub gum: pick "Update this folder" once, then quit the menu
+	gum := "#!/bin/sh\n[ \"$1\" = choose ] || exit 1\n[ -f " + root + "/picked ] && exit 1\ntouch " + root + "/picked\ngrep '^Update this folder'\n"
+	writeJSONFile(t, filepath.Join(bin, "gum"), gum)
+	if err := os.Chmod(filepath.Join(bin, "gum"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+
+	out, calls, err := runUpdateWith(t, realTempDir(t), t.TempDir(), "", env, "-g", "menu")
+	if err != nil {
+		t.Fatalf("menu failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "swoop does not know this project") {
+		t.Fatalf("missing unknown-project error:\n%s", out)
+	}
+	if calls != "" {
+		t.Fatalf("skills was called: %q", calls)
 	}
 }
