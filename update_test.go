@@ -523,3 +523,36 @@ func TestConfirmNoWithoutDenyGoesBack(t *testing.T) {
 		t.Fatalf("screen = %d, want scMenu", m.screen)
 	}
 }
+
+func TestLibraryShownOnceAndNotRemovable(t *testing.T) {
+	config, data := t.TempDir(), t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	t.Setenv("XDG_DATA_HOME", data)
+	lib := filepath.Join(data, "swoop", "library")
+	if err := os.MkdirAll(filepath.Join(config, "swoop"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(lib, "my-skill") + "\n" + filepath.Join(lib, "other") + "\nowner/repo\n"
+	if err := os.WriteFile(filepath.Join(config, "swoop", "sources"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	items := sourceItems()
+	if len(items) != 2 || items[0].id != lib || items[0].title != "Library" || items[1].id != "owner/repo" {
+		t.Fatalf("install source list = %#v, want Library then owner/repo", items)
+	}
+
+	m := newModel()
+	actRemove(m)
+	for _, it := range m.pick.items {
+		if inLibrary(it.id) {
+			t.Fatalf("remove list offers the Library: %#v", m.pick.items)
+		}
+	}
+	if len(m.pick.items) != 1 {
+		t.Fatalf("remove list = %#v, want only owner/repo", m.pick.items)
+	}
+	if got := short(filepath.Join(lib, "my-skill")); got != "Library" {
+		t.Fatalf("legacy star source label = %q, want Library", got)
+	}
+}

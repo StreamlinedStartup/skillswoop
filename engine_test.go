@@ -549,3 +549,91 @@ func TestEngineMenuUpdateThisFolderIgnoresGlobalFlag(t *testing.T) {
 		t.Fatalf("skills was called: %q", calls)
 	}
 }
+
+func TestEngineLibraryIsOneBuiltInSource(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required by the engine skill walker")
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	writeSkill(t, repo, "tdd", "Test-driven development.")
+	writeSkill(t, repo, "review", "Code review.")
+	home := filepath.Join(root, "home")
+	writeSkill(t, filepath.Join(home, ".claude"), "tidied", "Moved by Tidy.")
+
+	config := filepath.Join(root, "config")
+	data := filepath.Join(root, "data")
+	lib := filepath.Join(data, "swoop", "library")
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("bash", append([]string{"engine/swoop-core"}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"HOME="+home,
+			"XDG_CONFIG_HOME="+config,
+			"XDG_DATA_HOME="+data,
+			"NO_COLOR=1",
+			"SWOOP_ASSUME_YES=1",
+		)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	must := func(args ...string) string {
+		t.Helper()
+		out, err := run(args...)
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+		return out
+	}
+
+	must("add", filepath.Join(repo, "skills", "tdd"), filepath.Join(repo, "skills", "review"), "owner/other")
+	must("stash")
+	// a legacy per-skill line from older versions must collapse into the Library
+	sourcesFile := filepath.Join(config, "swoop", "sources")
+	f, err := os.OpenFile(sourcesFile, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(filepath.Join(lib, "tdd") + "\n")
+	f.Close()
+
+	if got, want := must("_sources"), lib+"\nowner/other\n"; got != want {
+		t.Fatalf("_sources = %q, want %q", got, want)
+	}
+	if out := must("list"); strings.Count(out, "library") != 1 || !strings.Contains(out, "Library") {
+		t.Fatalf("list should show the Library once:\n%s", out)
+	}
+	skills := must("_skills", lib)
+	for _, want := range []string{"tdd\tTest-driven development.", "review\tCode review.", "tidied\tMoved by Tidy."} {
+		if !strings.Contains(skills, want) {
+			t.Fatalf("_skills on Library missing %q:\n%s", want, skills)
+		}
+	}
+	must("star", lib, "tdd")
+
+	snapshot := func() string {
+		var b strings.Builder
+		for _, p := range []string{sourcesFile, filepath.Join(config, "swoop", "stars")} {
+			c, _ := os.ReadFile(p)
+			b.Write(c)
+		}
+		ents, _ := os.ReadDir(lib)
+		for _, e := range ents {
+			b.WriteString(e.Name() + "\n")
+		}
+		return b.String()
+	}
+	before := snapshot()
+	out, err := run("remove", lib, filepath.Join(lib, "tdd"))
+	if err == nil || !strings.Contains(out, "cannot be removed") {
+		t.Fatalf("remove Library should fail with a message, err=%v\n%s", err, out)
+	}
+	if after := snapshot(); after != before {
+		t.Fatalf("remove Library changed state:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if out, err := run("remove", lib, "owner/other"); err == nil {
+		t.Fatalf("mixed remove should still fail:\n%s", out)
+	}
+	if got, want := must("_sources"), lib+"\n"; got != want {
+		t.Fatalf("other source should be removed alongside the refusal, _sources = %q", got)
+	}
+}
