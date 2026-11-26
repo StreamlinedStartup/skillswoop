@@ -107,10 +107,30 @@ func libraryDir() string {
 }
 
 // inLibrary reports whether src is the Library or a legacy per-skill
-// "library/<name>" source saved by older versions.
+// "library/<name>" source saved by older versions (a direct child holding a
+// SKILL.md, or one since deleted). Deeper paths are ordinary sources.
 func inLibrary(src string) bool {
 	lib, s := libraryDir(), filepath.Clean(src)
-	return s == lib || strings.HasPrefix(s, lib+string(filepath.Separator))
+	if s == lib {
+		return true
+	}
+	if filepath.Dir(s) != lib {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(s, "SKILL.md")); err == nil {
+		return true
+	}
+	_, err := os.Stat(s)
+	return os.IsNotExist(err)
+}
+
+// canonSource folds every Library spelling into libraryDir() so a star saved
+// against a legacy library/<name> source is the same star as one on the Library.
+func canonSource(src string) string {
+	if inLibrary(src) {
+		return libraryDir()
+	}
+	return src
 }
 
 // loadSources returns the saved (removable) sources; Library entries are skipped.

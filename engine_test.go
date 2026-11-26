@@ -637,3 +637,99 @@ func TestEngineLibraryIsOneBuiltInSource(t *testing.T) {
 		t.Fatalf("other source should be removed alongside the refusal, _sources = %q", got)
 	}
 }
+
+// covers the VRTS-5 review: relative Library paths, legacy stars, nested
+// sources under the Library, and remove with no saved sources.
+func TestEngineLibraryEdgeCases(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required by the engine skill walker")
+	}
+	script, err := filepath.Abs("engine/swoop-core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	writeSkill(t, repo, "tdd", "Test-driven development.")
+	config := filepath.Join(root, "config")
+	data := filepath.Join(root, "data")
+	lib := filepath.Join(data, "swoop", "library")
+	sourcesFile := filepath.Join(config, "swoop", "sources")
+	starsFile := filepath.Join(config, "swoop", "stars")
+	run := func(dir string, args ...string) (string, error) {
+		cmd := exec.Command("bash", append([]string{script}, args...)...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"XDG_CONFIG_HOME="+config,
+			"XDG_DATA_HOME="+data,
+			"NO_COLOR=1",
+		)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
+
+	// a star made before any source was saved survives `remove` of that source
+	if out, err := run(root, "star", repo, "tdd"); err != nil {
+		t.Fatalf("star: %v\n%s", err, out)
+	}
+	if out, err := run(root, "remove", repo); err != nil || !strings.Contains(out, "no saved sources") {
+		t.Fatalf("remove with no saved sources should be a no-op: %v\n%s", err, out)
+	}
+	if !strings.Contains(read(starsFile), repo+"\ttdd\t") {
+		t.Fatalf("star was pruned:\n%s", read(starsFile))
+	}
+
+	// relative Library path is refused like the absolute one
+	if out, err := run(root, "add", filepath.Join(repo, "skills", "tdd"), "owner/other"); err != nil {
+		t.Fatalf("add: %v\n%s", err, out)
+	}
+	before := read(sourcesFile)
+	out, err := run(filepath.Join(data, "swoop"), "remove", "./library")
+	if err == nil || !strings.Contains(out, "cannot be removed") {
+		t.Fatalf("relative Library remove should be refused: %v\n%s", err, out)
+	}
+	if read(sourcesFile) != before {
+		t.Fatalf("relative Library remove changed sources")
+	}
+
+	// a legacy library/<name> star and a Library star are the same star
+	legacy := filepath.Join(lib, "tdd")
+	if err := os.WriteFile(starsFile, []byte(legacy+"\ttdd\tTest-driven development.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(root, "star", lib, "tdd"); err != nil {
+		t.Fatalf("star Library: %v\n%s", err, out)
+	}
+	if got := read(starsFile); strings.Count(got, "\ttdd\t") != 1 || !strings.HasPrefix(got, lib+"\t") {
+		t.Fatalf("legacy and Library star should be one Library star:\n%s", got)
+	}
+	if err := os.WriteFile(starsFile, []byte(legacy+"\ttdd\t\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(root, "unstar", lib, "tdd"); err != nil {
+		t.Fatalf("unstar: %v\n%s", err, out)
+	}
+	if strings.Contains(read(starsFile), "tdd") {
+		t.Fatalf("unstar on the Library should remove the legacy star:\n%s", read(starsFile))
+	}
+
+	// a multi-skill folder nested in the Library is an ordinary source
+	nested := filepath.Join(lib, "collections", "team")
+	writeSkill(t, nested, "review", "Code review.")
+	if out, err := run(root, "--no-copy", "add", nested); err != nil {
+		t.Fatalf("add nested: %v\n%s", err, out)
+	}
+	if out, _ := run(root, "_sources"); !strings.Contains(out, nested+"\n") {
+		t.Fatalf("nested source should be listed:\n%s", out)
+	}
+	if out, _ := run(root, "_skills", nested); !strings.Contains(out, "review\t") {
+		t.Fatalf("nested source should list its skills:\n%s", out)
+	}
+	if out, err := run(root, "remove", nested); err != nil {
+		t.Fatalf("nested source should be removable: %v\n%s", err, out)
+	}
+	if strings.Contains(read(sourcesFile), nested) {
+		t.Fatalf("nested source still saved:\n%s", read(sourcesFile))
+	}
+}

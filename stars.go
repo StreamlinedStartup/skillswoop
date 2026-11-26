@@ -17,7 +17,7 @@ func loadStars() []item {
 		if len(f) < 2 {
 			continue
 		}
-		src := strings.TrimSpace(f[0])
+		src := canonSource(strings.TrimSpace(f[0]))
 		skill := strings.TrimSpace(f[1])
 		if src == "" || skill == "" {
 			continue

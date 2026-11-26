@@ -556,3 +556,47 @@ func TestLibraryShownOnceAndNotRemovable(t *testing.T) {
 		t.Fatalf("legacy star source label = %q, want Library", got)
 	}
 }
+
+func TestLegacyLibraryStarIsTheLibraryStar(t *testing.T) {
+	config, data := t.TempDir(), t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	t.Setenv("XDG_DATA_HOME", data)
+	lib := filepath.Join(data, "swoop", "library")
+	if err := os.MkdirAll(filepath.Join(lib, "foo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lib, "foo", "SKILL.md"), []byte("---\nname: foo\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(lib, "collections", "team")
+	if err := os.MkdirAll(filepath.Join(config, "swoop"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(starsPath(), []byte(filepath.Join(lib, "foo")+"\tfoo\tdemo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "swoop", "sources"), []byte(nested+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	items := applyStars([]item{{id: "foo", title: "foo"}}, libraryDir())
+	if !items[0].star {
+		t.Fatalf("legacy star should show on the Library skill")
+	}
+	if on, err := toggleStar(items[0]); err != nil || on {
+		t.Fatalf("toggle should unstar the legacy star: on=%v err=%v", on, err)
+	}
+	if got := loadStars(); len(got) != 0 {
+		t.Fatalf("stars after unstar = %#v, want none", got)
+	}
+
+	src := sourceItems()
+	if len(src) != 2 || src[1].id != nested {
+		t.Fatalf("nested folder under the Library should stay a source: %#v", src)
+	}
+	m := newModel()
+	actRemove(m)
+	if len(m.pick.items) != 1 || m.pick.items[0].id != nested {
+		t.Fatalf("nested source should be removable: %#v", m.pick.items)
+	}
+}
