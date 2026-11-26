@@ -142,7 +142,7 @@ load_agents() { if [ -s "$AGENTS_FILE" ]; then cat "$AGENTS_FILE"; else printf '
 # physical absolute form of a local path (symlinks, . and .. resolved), so
 # ./library, ~/… and /var vs /private/var spellings compare equal
 abs_path() {
-  local p="$1"; case "$p" in "~") p="$HOME" ;; "~"/*) p="$HOME/${p#~/}" ;; esac
+  local p="$1"; case "$p" in "~") p="$HOME" ;; "~"/*) p="$HOME/${p:2}" ;; esac
   case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
   p="${p%/}"
   if [ -d "$p" ]; then ( cd "$p" && pwd -P )
@@ -165,7 +165,7 @@ canon_src() { if in_library "$1"; then printf '%s\n' "$LIBRARY"; else printf '%s
 canon_stars() {
   [ -f "$STARS" ] || return 0
   local tmp src skill desc; tmp="$(mktmp)"
-  while IFS=$'\t' read -r src skill desc; do
+  while IFS=$'\t' read -r src skill desc || [ -n "$src" ]; do  # keep an unterminated last line
     [ -n "$src" ] || continue
     printf '%s\t%s\t%s\n' "$(canon_src "$src")" "$skill" "$desc"
   done < "$STARS" | awk -F '\t' '!seen[$1 FS $2]++' > "$tmp"
@@ -176,7 +176,7 @@ source_list() {
   printf '%s\n' "$LIBRARY"
   [ -f "$SOURCES" ] || return 0
   local s
-  while IFS= read -r s; do
+  while IFS= read -r s || [ -n "$s" ]; do
     if [ -z "$s" ] || in_library "$s"; then continue; fi
     printf '%s\n' "$s"
   done < "$SOURCES"
@@ -251,7 +251,7 @@ prune_stars_for_sources() {
 }
 is_local() { case "$1" in /*|./*|../*|"~"|"~"/*) return 0 ;; esac; [ -e "$1" ]; }
 resolve_local() {
-  local p="$1"; case "$p" in "~") p="$HOME" ;; "~"/*) p="$HOME/${p#~/}" ;; esac
+  local p="$1"; case "$p" in "~") p="$HOME" ;; "~"/*) p="$HOME/${p:2}" ;; esac
   [ -e "$p" ] || die "path not found: $p"
   if [ -f "$p" ]; then [ "$(basename "$p")" = SKILL.md ] || die "not a SKILL.md or directory: $p"; p="$(dirname "$p")"; fi
   [ -d "$p" ] || die "not a directory: $p"; ( cd "$p" && pwd )

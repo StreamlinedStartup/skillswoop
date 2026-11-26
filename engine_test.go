@@ -660,6 +660,7 @@ func TestEngineLibraryEdgeCases(t *testing.T) {
 		cmd := exec.Command("bash", append([]string{script}, args...)...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
+			"HOME="+root,
 			"XDG_CONFIG_HOME="+config,
 			"XDG_DATA_HOME="+data,
 			"NO_COLOR=1",
@@ -691,6 +692,25 @@ func TestEngineLibraryEdgeCases(t *testing.T) {
 	}
 	if read(sourcesFile) != before {
 		t.Fatalf("relative Library remove changed sources")
+	}
+	// a quoted home-relative spelling is refused too (HOME is root here)
+	out, err = run(root, "remove", "~/data/swoop/library")
+	if err == nil || !strings.Contains(out, "cannot be removed") {
+		t.Fatalf("~/ Library remove should be refused: %v\n%s", err, out)
+	}
+	if read(sourcesFile) != before {
+		t.Fatalf("~/ Library remove changed sources")
+	}
+
+	// listing stars keeps a last record that has no trailing newline
+	if err := os.WriteFile(starsFile, []byte(repo+"\ttdd\tdesc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(root, "stars"); err != nil || !strings.Contains(out, repo+"\ttdd\tdesc") {
+		t.Fatalf("stars dropped the unterminated record: %v\n%s", err, out)
+	}
+	if !strings.Contains(read(starsFile), repo+"\ttdd\tdesc") {
+		t.Fatalf("stars file lost the unterminated record:\n%s", read(starsFile))
 	}
 
 	// a legacy library/<name> star and a Library star are the same star
