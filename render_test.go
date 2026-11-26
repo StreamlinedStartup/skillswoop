@@ -365,3 +365,30 @@ func TestAliasScreenNeverSaysRename(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoveStarsConfirmShowsEachStar(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel()
+	m.width, m.height = 96, 40
+	m.layout()
+	m.screen = scConfirm
+	m.confirmMsg = removeStarsMsg(2, []item{
+		{id: "tdd", source: "owner/one"},
+		{id: "review", source: "https://github.com/owner/two.git"},
+	})
+	view := stripANSI(m.View())
+	for _, want := range []string{"2 star(s) will be deleted", "tdd  (owner/one)", "review  (owner/two)"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("confirm view missing %q:\n%s", want, view)
+		}
+	}
+
+	many := make([]item, 10)
+	for i := range many {
+		many[i] = item{id: fmt.Sprintf("s%d", i), source: "owner/big"}
+	}
+	msg := removeStarsMsg(1, many)
+	if !strings.Contains(msg, "10 star(s)") || !strings.Contains(msg, "+ 2 more") || strings.Contains(msg, "s9") {
+		t.Fatalf("long list should collapse with a count:\n%s", msg)
+	}
+}

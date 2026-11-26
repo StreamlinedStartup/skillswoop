@@ -91,19 +91,19 @@ func toggleStar(it item) (bool, error) {
 	return true, saveStars(stars)
 }
 
-func pruneStarsForSources(sources []string) error {
-	remove := map[string]bool{}
+// starsForSources returns the Stars that belong to any of sources.
+func starsForSources(sources []string) []item {
+	in := map[string]bool{}
 	for _, src := range sources {
-		remove[src] = true
+		in[src] = true
 	}
-	stars := loadStars()
-	kept := stars[:0]
-	for _, st := range stars {
-		if !remove[st.source] {
-			kept = append(kept, st)
+	var out []item
+	for _, st := range loadStars() {
+		if in[st.source] {
+			out = append(out, st)
 		}
 	}
-	return saveStars(kept)
+	return out
 }
 
 func hasStar(stars []item, src, skill string) bool {

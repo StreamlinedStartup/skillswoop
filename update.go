@@ -615,9 +615,21 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for _, it := range sel {
 				args = append(args, it.id)
 			}
-			m.busyTitle = "removing sources"
-			m.screen = scRunning
-			return m, removeSourcesCmd(args...)
+			remove := func(mm *model) tea.Cmd {
+				mm.busyTitle = "removing sources"
+				mm.screen = scRunning
+				// the engine deletes the Stars too; SWOOP_ASSUME_YES skips its own question
+				return opCmd("removed sources", args...)
+			}
+			stars := starsForSources(args[1:])
+			if len(stars) == 0 {
+				return m, remove(m)
+			}
+			m.prev = scRemove
+			m.screen = scConfirm
+			m.confirmMsg = removeStarsMsg(len(sel), stars)
+			m.confirmCmd = remove
+			return m, nil
 		}
 		return m, nil
 
@@ -729,21 +741,20 @@ func hooksDenyArgs(args []string) []string {
 	return append(append([]string(nil), args...), "--no-hooks-enable")
 }
 
-func removeSourcesCmd(args ...string) tea.Cmd {
-	return func() tea.Msg {
-		out, err := core(args...)
-		body := stripANSI(out)
-		if err == nil {
-			if pruneErr := pruneStarsForSources(args[1:]); pruneErr != nil {
-				err = pruneErr
-				if body != "" {
-					body += "\n"
-				}
-				body += "failed to prune starred skills: " + pruneErr.Error()
-			}
+// removeStarsMsg warns which Stars go with the Sources; long lists collapse
+// to a count, as the install summary does.
+func removeStarsMsg(sources int, stars []item) string {
+	const limit = 8
+	var b strings.Builder
+	b.WriteString("Remove " + itoa(sources) + " source(s)? These " + itoa(len(stars)) + " star(s) will be deleted:")
+	for i, st := range stars {
+		if i == limit {
+			b.WriteString("\n  + " + itoa(len(stars)-limit) + " more")
+			break
 		}
-		return opDoneMsg{title: "removed sources", output: body, err: err}
+		b.WriteString("\n  " + st.id + "  (" + short(st.source) + ")")
 	}
+	return b.String()
 }
 
 func (m *model) onFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

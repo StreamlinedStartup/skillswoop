@@ -105,6 +105,7 @@ swoop --version
 The Library is a built-in source: it is always the first source, lists every skill in `~/.local/share/swoop/library/`, and cannot be removed (`swoop remove` refuses it).
 
 **Name clash.** When a skill entering the Library (by `swoop add <local skill>` or Tidy) has the same folder name as a different skill already there, swoop changes nothing and asks what to do: rename the incoming skill, rename the Library skill, or skip. A rename changes the folder name and the `name:` field in that skill's `SKILL.md` (for `add`, only the Library copy; your own folder is left as is), and a Star on a renamed Library skill follows it. New names may use only lowercase letters, digits, and hyphens and must not be taken. Adding a folder identical to the Library copy just says it is already there. With no terminal to ask in (piped output or `SWOOP_ASSUME_YES=1`), `swoop add` refuses with a non-zero exit, and `swoop stash` moves the other skills and lists each clashing one by name, leaving it in place. The TUI shows the same choice on its own screen.
+Removing a source also deletes its stars. When any chosen source has stars, `swoop remove` and the TUI list them (skill and source) and ask yes or no first; no, or no answer, removes nothing. Set `SWOOP_ASSUME_YES=1` to skip the question in scripts.
 
 ## Plugins
 

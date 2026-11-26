@@ -127,9 +127,10 @@ ui_input() {  # $1 prompt  $2 placeholder; prints entered value
   if have gum; then gum input --prompt "$1 " --placeholder "${2:-}"
   else printf '%s ' "$1" >&2; local v; read_tty v || return 1; printf '%s' "$v"; fi
 }
-ui_confirm() {  # $1 question
+ui_confirm() {  # $1 question  $2=no makes Enter answer no
   [ -n "${SWOOP_ASSUME_YES:-}" ] && return 0      # front-end already confirmed
-  if have gum; then gum confirm "$1"
+  if have gum; then
+    if [ "${2:-}" = no ]; then gum confirm --default=false "$1"; else gum confirm "$1"; fi
   else printf '%s [y/N] ' "$1" >&2; local a; read_tty a || return 1
        case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac; fi
 }
@@ -237,16 +238,22 @@ marketplace_line() {  # $1 source; prints the cached "src<TAB>claude<TAB>codex" 
   done < "$MARKETPLACES"
   return 1
 }
+# star lines whose source is one of $2..; $1=1 prints the matches, $1=0 the rest
+_stars_of() {
+  local want="$1" src srcs=""; shift
+  for src in "$@"; do srcs="${srcs}${src}"$'\n'; done
+  # ENVIRON, not -v: BSD awk rejects a newline in -v and -v rewrites backslashes
+  SWOOP_DOOMED="$srcs" awk -F '\t' -v want="$want" '
+    BEGIN { n=split(ENVIRON["SWOOP_DOOMED"], srcs, "\n"); for (i=1; i<=n; i++) if (srcs[i]!="") rm[srcs[i]]=1 }
+    (($1 in rm) ? 1 : 0) == want + 0
+  ' "$STARS"
+}
+stars_for_sources() { [ -f "$STARS" ] && [ "$#" -gt 0 ] || return 0; _stars_of 1 "$@"; }
 prune_stars_for_sources() {
   [ -f "$STARS" ] || return 0
   [ "$#" -gt 0 ] || return 0
-  local tmp src awk_srcs=""
-  tmp="$(mktmp)"
-  for src in "$@"; do awk_srcs="${awk_srcs}${src}"$'\n'; done
-  awk -F '\t' -v doomed="$awk_srcs" '
-    BEGIN { n=split(doomed, srcs, "\n"); for (i=1; i<=n; i++) if (srcs[i]!="") rm[srcs[i]]=1 }
-    !($1 in rm)
-  ' "$STARS" > "$tmp" 2>/dev/null || :
+  local tmp; tmp="$(mktmp)"
+  _stars_of 0 "$@" > "$tmp"
   mv "$tmp" "$STARS"
 }
 is_local() { case "$1" in /*|./*|../*|"~"|"~"/*) return 0 ;; esac; [ -e "$1" ]; }
@@ -724,20 +731,30 @@ cmd_remove() {
     chosen="$(source_list | tail -n +2 | menu "remove a source")" || true
   fi
   [ -n "$chosen" ] || return 0
-  local s rc=0 none=""; local -a removed=()
+  local s rc=0 doomed=""; local -a cand=()
+  # refuse the Library up front so a declined prompt still reports it
   while IFS= read -r s; do
     [ -n "$s" ] || continue
     if in_library "$s"; then
       printf '%serror:%s the Library is built in and cannot be removed: %s\n' "$RED" "$RST" "$s" >&2
-      rc=1; continue
-    fi
-    if [ ! -s "$SOURCES" ]; then none=1; continue; fi   # nothing saved: no-op, stars untouched
+      rc=1
+    else cand+=( "$s" ); fi
+  done <<< "$chosen"
+  [ "${#cand[@]}" -gt 0 ] || return "$rc"
+  [ -s "$SOURCES" ] || { echo "no saved sources."; return "$rc"; }   # nothing saved: stars untouched
+  # warn before the Stars of the chosen Sources go with them
+  doomed="$(stars_for_sources "${cand[@]}")"
+  if [ -n "$doomed" ]; then
+    printf '%swarning:%s these stars will be deleted with their source:\n' "$YLW" "$RST" >&2
+    printf '%s\n' "$doomed" | awk -F '\t' '{ printf "  %s  (source: %s)\n", $2, $1 }' >&2
+    ui_confirm "Remove the source(s) and these stars?" no || { echo "nothing removed."; return "$rc"; }
+  fi
+  for s in "${cand[@]}"; do
     grep -vxF "$s" "$SOURCES" > "$SOURCES.tmp" 2>/dev/null || : > "$SOURCES.tmp"
     mv "$SOURCES.tmp" "$SOURCES"
-    printf '  removed %s\n' "$s"; removed+=( "$s" )
-  done <<< "$chosen"
-  if [ -n "$none" ]; then echo "no saved sources."; fi
-  if [ "${#removed[@]}" -gt 0 ]; then prune_stars_for_sources "${removed[@]}"; fi
+    printf '  removed %s\n' "$s"
+  done
+  prune_stars_for_sources "${cand[@]}"
   return "$rc"
 }
 
