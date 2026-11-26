@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -756,6 +757,8 @@ func TestEngineLibraryEdgeCases(t *testing.T) {
 }
 
 // VRTS-7: removing a Source with Stars warns, lists them, and asks first.
+// Each case runs with a known prompt backend: "plain" hides gum and fzf so
+// the [y/N] fallback reads stdin; "gum" puts a stub gum first on PATH.
 func TestEngineRemoveWarnsAboutStars(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is required by the engine skill walker")
@@ -772,20 +775,60 @@ func TestEngineRemoveWarnsAboutStars(t *testing.T) {
 	plain := filepath.Join(root, "plain")
 	writeSkill(t, plain, "lint", "Lint.")
 	config := filepath.Join(root, "config")
+	data := filepath.Join(root, "data")
+	lib := filepath.Join(data, "swoop", "library")
 	sourcesFile := filepath.Join(config, "swoop", "sources")
 	starsFile := filepath.Join(config, "swoop", "stars")
+
+	// PATH without any gum or fzf from the host
+	var keep []string
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		_, gumErr := os.Stat(filepath.Join(dir, "gum"))
+		_, fzfErr := os.Stat(filepath.Join(dir, "fzf"))
+		if gumErr != nil && fzfErr != nil {
+			keep = append(keep, dir)
+		}
+	}
+	plainPath := strings.Join(keep, string(os.PathListSeparator))
+	// stub gum: confirm answers from stdin and applies its default on empty
+	// input like real gum (yes unless --default=false); choose picks the
+	// line equal to $PICK
+	gumBin := filepath.Join(root, "gumbin")
+	if err := os.MkdirAll(gumBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gum := `#!/bin/sh
+case "$1" in
+confirm)
+  def=0; for a in "$@"; do [ "$a" = "--default=false" ] && def=1; done
+  IFS= read -r ans || ans=""
+  case "$ans" in y) exit 0 ;; n) exit 1 ;; "") exit $def ;; esac; exit 1 ;;
+choose) grep -xF "$PICK"; exit 0 ;;
+esac
+exit 2
+`
+	if err := os.WriteFile(filepath.Join(gumBin, "gum"), []byte(gum), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	// stdin is the answer; Setsid drops the controlling terminal so the
 	// engine reads it from stdin instead of /dev/tty
-	run := func(stdin string, extraEnv []string, args ...string) (string, error) {
+	run := func(backend, stdin string, extraEnv []string, args ...string) (string, error) {
 		cmd := exec.Command("bash", append([]string{script}, args...)...)
 		cmd.Dir = root
 		cmd.Stdin = strings.NewReader(stdin)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		path := plainPath
+		if backend == "gum" {
+			path = gumBin + string(os.PathListSeparator) + plainPath
+		}
 		cmd.Env = append(os.Environ(),
+			"PATH="+path,
 			"HOME="+root,
 			"XDG_CONFIG_HOME="+config,
-			"XDG_DATA_HOME="+filepath.Join(root, "data"),
+			"XDG_DATA_HOME="+data,
 			"NO_COLOR=1",
+			"SWOOP_ASSUME_YES=", // the caller's value must not answer for us
 		)
 		cmd.Env = append(cmd.Env, extraEnv...)
 		out, err := cmd.CombinedOutput()
@@ -794,7 +837,7 @@ func TestEngineRemoveWarnsAboutStars(t *testing.T) {
 	read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
 	must := func(args ...string) {
 		t.Helper()
-		if out, err := run("", nil, args...); err != nil {
+		if out, err := run("plain", "", nil, args...); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out)
 		}
 	}
@@ -803,19 +846,29 @@ func TestEngineRemoveWarnsAboutStars(t *testing.T) {
 	must("star", other, "review")
 
 	// a Source with no Stars is removed without a question
-	out, err := run("", nil, "remove", plain)
+	out, err := run("plain", "", nil, "remove", plain)
 	if err != nil || strings.Contains(out, "warning") || !strings.Contains(out, "removed "+plain) {
 		t.Fatalf("plain remove should not ask: %v\n%s", err, out)
 	}
 
-	// "no" and empty input remove nothing
 	sources, stars := read(sourcesFile), read(starsFile)
+	unchanged := func(label, out string) {
+		t.Helper()
+		if !strings.Contains(out, "nothing removed.") {
+			t.Fatalf("%s: missing 'nothing removed.':\n%s", label, out)
+		}
+		if read(sourcesFile) != sources || read(starsFile) != stars {
+			t.Fatalf("%s changed state:\nsources:\n%s\nstars:\n%s", label, read(sourcesFile), read(starsFile))
+		}
+	}
+
+	// fallback prompt: "no" and empty input remove nothing; one question for both
 	for _, answer := range []string{"n\n", ""} {
-		out, err = run(answer, nil, "remove", starred, other)
+		out, err = run("plain", answer, nil, "remove", starred, other)
 		if err != nil {
 			t.Fatalf("declined remove: %v\n%s", err, out)
 		}
-		for _, want := range []string{"tdd  (source: " + starred + ")", "review  (source: " + other + ")", "[y/N]", "nothing removed."} {
+		for _, want := range []string{"tdd  (source: " + starred + ")", "review  (source: " + other + ")"} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("answer %q: output missing %q:\n%s", answer, want, out)
 			}
@@ -823,13 +876,32 @@ func TestEngineRemoveWarnsAboutStars(t *testing.T) {
 		if strings.Count(out, "[y/N]") != 1 {
 			t.Fatalf("expected one question for both sources:\n%s", out)
 		}
-		if read(sourcesFile) != sources || read(starsFile) != stars {
-			t.Fatalf("answer %q changed state:\nsources:\n%s\nstars:\n%s", answer, read(sourcesFile), read(starsFile))
-		}
+		unchanged("fallback answer "+strconv.Quote(answer), out)
 	}
 
+	// gum: Enter (empty input) must mean no, not gum's default yes
+	out, err = run("gum", "\n", nil, "remove", starred)
+	if err != nil {
+		t.Fatalf("gum enter: %v\n%s", err, out)
+	}
+	unchanged("gum enter", out)
+
+	// the Library is refused before the prompt; declining keeps the error exit
+	out, err = run("plain", "n\n", nil, "remove", lib, starred)
+	if err == nil || !strings.Contains(out, "cannot be removed") {
+		t.Fatalf("Library + decline should fail with the Library error: %v\n%s", err, out)
+	}
+	unchanged("Library + decline", out)
+
+	// the no-argument picker path warns the same way
+	out, err = run("gum", "n\n", []string{"PICK=" + starred}, "remove")
+	if err != nil || !strings.Contains(out, "tdd  (source: "+starred+")") {
+		t.Fatalf("picker remove should warn: %v\n%s", err, out)
+	}
+	unchanged("picker decline", out)
+
 	// "yes" removes the Source and its Stars; other Stars stay
-	if out, err = run("y\n", nil, "remove", starred); err != nil || !strings.Contains(out, "removed "+starred) {
+	if out, err = run("plain", "y\n", nil, "remove", starred); err != nil || !strings.Contains(out, "removed "+starred) {
 		t.Fatalf("confirmed remove: %v\n%s", err, out)
 	}
 	if strings.Contains(read(sourcesFile), starred) || strings.Contains(read(starsFile), starred) {
@@ -840,7 +912,7 @@ func TestEngineRemoveWarnsAboutStars(t *testing.T) {
 	}
 
 	// SWOOP_ASSUME_YES skips the question
-	if out, err = run("", []string{"SWOOP_ASSUME_YES=1"}, "remove", other); err != nil || strings.Contains(out, "[y/N]") {
+	if out, err = run("plain", "", []string{"SWOOP_ASSUME_YES=1"}, "remove", other); err != nil || strings.Contains(out, "[y/N]") {
 		t.Fatalf("assume-yes remove should not ask: %v\n%s", err, out)
 	}
 	if strings.Contains(read(sourcesFile), other) || strings.Contains(read(starsFile), other) {

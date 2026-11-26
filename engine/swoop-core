@@ -127,9 +127,10 @@ ui_input() {  # $1 prompt  $2 placeholder; prints entered value
   if have gum; then gum input --prompt "$1 " --placeholder "${2:-}"
   else printf '%s ' "$1" >&2; local v; read_tty v || return 1; printf '%s' "$v"; fi
 }
-ui_confirm() {  # $1 question
+ui_confirm() {  # $1 question  $2=no makes Enter answer no
   [ -n "${SWOOP_ASSUME_YES:-}" ] && return 0      # front-end already confirmed
-  if have gum; then gum confirm "$1"
+  if have gum; then
+    if [ "${2:-}" = no ]; then gum confirm --default=false "$1"; else gum confirm "$1"; fi
   else printf '%s [y/N] ' "$1" >&2; local a; read_tty a || return 1
        case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac; fi
 }
@@ -715,32 +716,30 @@ cmd_remove() {
     chosen="$(source_list | tail -n +2 | menu "remove a source")" || true
   fi
   [ -n "$chosen" ] || return 0
-  local s rc=0 none="" doomed=""; local -a removed=() cand=()
-  # warn before the Stars of the chosen Sources go with them
-  if [ -s "$SOURCES" ]; then
-    while IFS= read -r s; do
-      if [ -n "$s" ] && ! in_library "$s"; then cand+=( "$s" ); fi
-    done <<< "$chosen"
-    [ "${#cand[@]}" -eq 0 ] || doomed="$(stars_for_sources "${cand[@]}")"
-  fi
-  if [ -n "$doomed" ]; then
-    printf '%swarning:%s these stars will be deleted with their source:\n' "$YLW" "$RST" >&2
-    printf '%s\n' "$doomed" | awk -F '\t' '{ printf "  %s  (source: %s)\n", $2, $1 }' >&2
-    ui_confirm "Remove the source(s) and these stars?" || { echo "nothing removed."; return 0; }
-  fi
+  local s rc=0 doomed=""; local -a cand=()
+  # refuse the Library up front so a declined prompt still reports it
   while IFS= read -r s; do
     [ -n "$s" ] || continue
     if in_library "$s"; then
       printf '%serror:%s the Library is built in and cannot be removed: %s\n' "$RED" "$RST" "$s" >&2
-      rc=1; continue
-    fi
-    if [ ! -s "$SOURCES" ]; then none=1; continue; fi   # nothing saved: no-op, stars untouched
+      rc=1
+    else cand+=( "$s" ); fi
+  done <<< "$chosen"
+  [ "${#cand[@]}" -gt 0 ] || return "$rc"
+  [ -s "$SOURCES" ] || { echo "no saved sources."; return "$rc"; }   # nothing saved: stars untouched
+  # warn before the Stars of the chosen Sources go with them
+  doomed="$(stars_for_sources "${cand[@]}")"
+  if [ -n "$doomed" ]; then
+    printf '%swarning:%s these stars will be deleted with their source:\n' "$YLW" "$RST" >&2
+    printf '%s\n' "$doomed" | awk -F '\t' '{ printf "  %s  (source: %s)\n", $2, $1 }' >&2
+    ui_confirm "Remove the source(s) and these stars?" no || { echo "nothing removed."; return "$rc"; }
+  fi
+  for s in "${cand[@]}"; do
     grep -vxF "$s" "$SOURCES" > "$SOURCES.tmp" 2>/dev/null || : > "$SOURCES.tmp"
     mv "$SOURCES.tmp" "$SOURCES"
-    printf '  removed %s\n' "$s"; removed+=( "$s" )
-  done <<< "$chosen"
-  if [ -n "$none" ]; then echo "no saved sources."; fi
-  if [ "${#removed[@]}" -gt 0 ]; then prune_stars_for_sources "${removed[@]}"; fi
+    printf '  removed %s\n' "$s"
+  done
+  prune_stars_for_sources "${cand[@]}"
   return "$rc"
 }
 
