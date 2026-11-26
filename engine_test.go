@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -751,5 +752,98 @@ func TestEngineLibraryEdgeCases(t *testing.T) {
 	}
 	if strings.Contains(read(sourcesFile), nested) {
 		t.Fatalf("nested source still saved:\n%s", read(sourcesFile))
+	}
+}
+
+// VRTS-7: removing a Source with Stars warns, lists them, and asks first.
+func TestEngineRemoveWarnsAboutStars(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required by the engine skill walker")
+	}
+	script, err := filepath.Abs("engine/swoop-core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := realTempDir(t)
+	starred := filepath.Join(root, "starred")
+	writeSkill(t, starred, "tdd", "Test-driven development.")
+	other := filepath.Join(root, "other")
+	writeSkill(t, other, "review", "Code review.")
+	plain := filepath.Join(root, "plain")
+	writeSkill(t, plain, "lint", "Lint.")
+	config := filepath.Join(root, "config")
+	sourcesFile := filepath.Join(config, "swoop", "sources")
+	starsFile := filepath.Join(config, "swoop", "stars")
+	// stdin is the answer; Setsid drops the controlling terminal so the
+	// engine reads it from stdin instead of /dev/tty
+	run := func(stdin string, extraEnv []string, args ...string) (string, error) {
+		cmd := exec.Command("bash", append([]string{script}, args...)...)
+		cmd.Dir = root
+		cmd.Stdin = strings.NewReader(stdin)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		cmd.Env = append(os.Environ(),
+			"HOME="+root,
+			"XDG_CONFIG_HOME="+config,
+			"XDG_DATA_HOME="+filepath.Join(root, "data"),
+			"NO_COLOR=1",
+		)
+		cmd.Env = append(cmd.Env, extraEnv...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
+	must := func(args ...string) {
+		t.Helper()
+		if out, err := run("", nil, args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	must("--no-copy", "add", starred, other, plain)
+	must("star", starred, "tdd")
+	must("star", other, "review")
+
+	// a Source with no Stars is removed without a question
+	out, err := run("", nil, "remove", plain)
+	if err != nil || strings.Contains(out, "warning") || !strings.Contains(out, "removed "+plain) {
+		t.Fatalf("plain remove should not ask: %v\n%s", err, out)
+	}
+
+	// "no" and empty input remove nothing
+	sources, stars := read(sourcesFile), read(starsFile)
+	for _, answer := range []string{"n\n", ""} {
+		out, err = run(answer, nil, "remove", starred, other)
+		if err != nil {
+			t.Fatalf("declined remove: %v\n%s", err, out)
+		}
+		for _, want := range []string{"tdd  (source: " + starred + ")", "review  (source: " + other + ")", "[y/N]", "nothing removed."} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("answer %q: output missing %q:\n%s", answer, want, out)
+			}
+		}
+		if strings.Count(out, "[y/N]") != 1 {
+			t.Fatalf("expected one question for both sources:\n%s", out)
+		}
+		if read(sourcesFile) != sources || read(starsFile) != stars {
+			t.Fatalf("answer %q changed state:\nsources:\n%s\nstars:\n%s", answer, read(sourcesFile), read(starsFile))
+		}
+	}
+
+	// "yes" removes the Source and its Stars; other Stars stay
+	if out, err = run("y\n", nil, "remove", starred); err != nil || !strings.Contains(out, "removed "+starred) {
+		t.Fatalf("confirmed remove: %v\n%s", err, out)
+	}
+	if strings.Contains(read(sourcesFile), starred) || strings.Contains(read(starsFile), starred) {
+		t.Fatalf("source or star left behind:\nsources:\n%s\nstars:\n%s", read(sourcesFile), read(starsFile))
+	}
+	if !strings.Contains(read(starsFile), other+"\treview\t") {
+		t.Fatalf("star of an unmarked source was deleted:\n%s", read(starsFile))
+	}
+
+	// SWOOP_ASSUME_YES skips the question
+	if out, err = run("", []string{"SWOOP_ASSUME_YES=1"}, "remove", other); err != nil || strings.Contains(out, "[y/N]") {
+		t.Fatalf("assume-yes remove should not ask: %v\n%s", err, out)
+	}
+	if strings.Contains(read(sourcesFile), other) || strings.Contains(read(starsFile), other) {
+		t.Fatalf("assume-yes left state behind:\nsources:\n%s\nstars:\n%s", read(sourcesFile), read(starsFile))
 	}
 }

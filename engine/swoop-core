@@ -237,16 +237,22 @@ marketplace_line() {  # $1 source; prints the cached "src<TAB>claude<TAB>codex" 
   done < "$MARKETPLACES"
   return 1
 }
+# star lines whose source is one of $2..; $1=1 prints the matches, $1=0 the rest
+_stars_of() {
+  local want="$1" src srcs=""; shift
+  for src in "$@"; do srcs="${srcs}${src}"$'\n'; done
+  # ENVIRON, not -v: BSD awk rejects a newline in -v and -v rewrites backslashes
+  SWOOP_DOOMED="$srcs" awk -F '\t' -v want="$want" '
+    BEGIN { n=split(ENVIRON["SWOOP_DOOMED"], srcs, "\n"); for (i=1; i<=n; i++) if (srcs[i]!="") rm[srcs[i]]=1 }
+    (($1 in rm) ? 1 : 0) == want + 0
+  ' "$STARS"
+}
+stars_for_sources() { [ -f "$STARS" ] && [ "$#" -gt 0 ] || return 0; _stars_of 1 "$@"; }
 prune_stars_for_sources() {
   [ -f "$STARS" ] || return 0
   [ "$#" -gt 0 ] || return 0
-  local tmp src awk_srcs=""
-  tmp="$(mktmp)"
-  for src in "$@"; do awk_srcs="${awk_srcs}${src}"$'\n'; done
-  awk -F '\t' -v doomed="$awk_srcs" '
-    BEGIN { n=split(doomed, srcs, "\n"); for (i=1; i<=n; i++) if (srcs[i]!="") rm[srcs[i]]=1 }
-    !($1 in rm)
-  ' "$STARS" > "$tmp" 2>/dev/null || :
+  local tmp; tmp="$(mktmp)"
+  _stars_of 0 "$@" > "$tmp"
   mv "$tmp" "$STARS"
 }
 is_local() { case "$1" in /*|./*|../*|"~"|"~"/*) return 0 ;; esac; [ -e "$1" ]; }
@@ -709,7 +715,19 @@ cmd_remove() {
     chosen="$(source_list | tail -n +2 | menu "remove a source")" || true
   fi
   [ -n "$chosen" ] || return 0
-  local s rc=0 none=""; local -a removed=()
+  local s rc=0 none="" doomed=""; local -a removed=() cand=()
+  # warn before the Stars of the chosen Sources go with them
+  if [ -s "$SOURCES" ]; then
+    while IFS= read -r s; do
+      if [ -n "$s" ] && ! in_library "$s"; then cand+=( "$s" ); fi
+    done <<< "$chosen"
+    [ "${#cand[@]}" -eq 0 ] || doomed="$(stars_for_sources "${cand[@]}")"
+  fi
+  if [ -n "$doomed" ]; then
+    printf '%swarning:%s these stars will be deleted with their source:\n' "$YLW" "$RST" >&2
+    printf '%s\n' "$doomed" | awk -F '\t' '{ printf "  %s  (source: %s)\n", $2, $1 }' >&2
+    ui_confirm "Remove the source(s) and these stars?" || { echo "nothing removed."; return 0; }
+  fi
   while IFS= read -r s; do
     [ -n "$s" ] || continue
     if in_library "$s"; then
