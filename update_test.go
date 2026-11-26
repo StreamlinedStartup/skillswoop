@@ -600,3 +600,83 @@ func TestLegacyLibraryStarIsTheLibraryStar(t *testing.T) {
 		t.Fatalf("nested source should be removable: %#v", m.pick.items)
 	}
 }
+
+// VRTS-7: Enter on "Remove sources" asks first when a marked Source has Stars.
+func removeScreenWith(t *testing.T, stars []item, sources ...string) *model {
+	t.Helper()
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	if err := os.MkdirAll(filepath.Join(config, "swoop"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "swoop", "sources"), []byte(strings.Join(sources, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveStars(stars); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel()
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	m = mm.(*model)
+	actRemove(m)
+	return m
+}
+
+func pressKey(m *model, k string) (*model, tea.Cmd) {
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+	switch k {
+	case "enter":
+		msg = tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		msg = tea.KeyMsg{Type: tea.KeyEsc}
+	case " ":
+		msg = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}
+	}
+	mm, cmd := m.Update(msg)
+	return mm.(*model), cmd
+}
+
+func TestRemoveSourcesWithStarsConfirmsFirst(t *testing.T) {
+	stars := []item{
+		{id: "tdd", source: "owner/starred"},
+		{id: "review", source: "owner/kept"},
+	}
+	m := removeScreenWith(t, stars, "owner/starred", "owner/kept")
+	m, _ = pressKey(m, " ") // mark owner/starred
+	m, cmd := pressKey(m, "enter")
+	if m.screen != scConfirm || cmd != nil {
+		t.Fatalf("screen = %d (cmd %v), want scConfirm and no command yet", m.screen, cmd != nil)
+	}
+	if !strings.Contains(m.confirmMsg, "tdd  (owner/starred)") || strings.Contains(m.confirmMsg, "review") {
+		t.Fatalf("confirm should list only the marked source's stars:\n%s", m.confirmMsg)
+	}
+
+	for _, k := range []string{"esc", "n"} {
+		m, cmd = pressKey(m, k)
+		if m.screen != scRemove || cmd != nil {
+			t.Fatalf("%q: screen = %d, want scRemove", k, m.screen)
+		}
+		if got := len(loadStars()); got != 2 {
+			t.Fatalf("%q: stars changed, got %d", k, got)
+		}
+		if len(m.pick.selected()) != 1 {
+			t.Fatalf("%q: marks lost", k)
+		}
+		m, _ = pressKey(m, "enter")
+	}
+
+	m, cmd = pressKey(m, "y")
+	if m.screen != scRunning || cmd == nil {
+		t.Fatalf("yes: screen = %d, want scRunning with a command", m.screen)
+	}
+}
+
+func TestRemoveSourcesWithoutStarsRemovesAtOnce(t *testing.T) {
+	m := removeScreenWith(t, []item{{id: "review", source: "owner/kept"}}, "owner/plain", "owner/kept")
+	m, _ = pressKey(m, " ") // mark owner/plain
+	m, cmd := pressKey(m, "enter")
+	if m.screen != scRunning || cmd == nil {
+		t.Fatalf("screen = %d, want scRunning with a command", m.screen)
+	}
+}

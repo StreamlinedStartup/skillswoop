@@ -104,6 +104,8 @@ swoop --version
 
 The Library is a built-in source: it is always the first source, lists every skill in `~/.local/share/swoop/library/`, and cannot be removed (`swoop remove` refuses it).
 
+Removing a source also deletes its stars. When any chosen source has stars, `swoop remove` and the TUI list them (skill and source) and ask yes or no first; no, or no answer, removes nothing. Set `SWOOP_ASSUME_YES=1` to skip the question in scripts.
+
 ## Plugins
 
 Both agents have native plugin systems (plugins bundle skills, hooks, MCP servers, and commands/agents for Claude; hooks auto-wire on install). swoop drives each agent's own plugin CLI and installs to every compatible configured agent at once. In the TUI: **Add a marketplace** → **Install plugins** (rows show `[hooks]` / `[mcp]` badges) → choose **This project** or **Globally** → **Remove plugins**.
