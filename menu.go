@@ -21,7 +21,7 @@ func menuDomains() []menuDomain {
 			{"⬢", "Install plugins", "pick a marketplace and plugins, then choose where to install", actInstallPlugins},
 			{"⊖", "Remove plugins", "uninstall plugins from claude + codex", actRemovePlugins},
 			{"⊕", "Add a marketplace", "register a plugin marketplace repo", actAddMarketplace},
-			{"⚙", "Marketplaces…", "open, rename, remove, or update saved marketplaces", actInstallPlugins},
+			{"⚙", "Marketplaces…", "open, set alias, remove, or update saved marketplaces", actInstallPlugins},
 		}},
 		{label: "SETTINGS", entries: []menuEntry{
 			{"⚙", "Default agents", "choose which agents to target", actAgents},

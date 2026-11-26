@@ -329,3 +329,39 @@ func TestBadgeRowFitsWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestAliasScreenNeverSaysRename(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, tc := range []struct {
+		prev    screen
+		heading string
+		help    string
+	}{
+		{scSources, "SET ALIAS source", "set source alias"},
+		{scMarkets, "SET ALIAS marketplace", "set marketplace alias"},
+	} {
+		m := newModel()
+		m.screen = tc.prev
+		var ctrlR string
+		for _, k := range m.contextKeys() {
+			if k.keys == "ctrl+r" {
+				ctrlR = k.desc
+			}
+		}
+		if ctrlR != tc.help {
+			t.Errorf("ctrl+r help = %q, want %q", ctrlR, tc.help)
+		}
+
+		m.prev, m.screen = tc.prev, scRename
+		if got := m.contextLabel(); got != "SET ALIAS" {
+			t.Errorf("title = %q, want SET ALIAS", got)
+		}
+		body := stripANSI(m.buildBody())
+		if !strings.Contains(body, tc.heading) {
+			t.Errorf("heading missing %q in %q", tc.heading, body)
+		}
+		if strings.Contains(strings.ToLower(body+m.contextLabel()+ctrlR), "rename") {
+			t.Errorf("visible text says rename: %q", body)
+		}
+	}
+}

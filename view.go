@@ -65,9 +65,9 @@ func (m *model) buildBody() string {
 			m.pick.view() + "\n" + m.pick.scrollFooter()
 
 	case scRename:
-		label := "RENAME source"
+		label := "SET ALIAS source"
 		if m.prev == scMarkets {
-			label = "RENAME marketplace"
+			label = "SET ALIAS marketplace"
 		}
 		return heading(label, short(m.renameURL)) + "\n\n" +
 			m.input.View() + "\n\n" + rowDesc.Render("blank shows the repository URL")
@@ -243,7 +243,7 @@ func (m *model) contextLabel() string {
 	case scRemove:
 		return "REMOVE SOURCES"
 	case scRename:
-		return "RENAME"
+		return "SET ALIAS"
 	case scConfirm:
 		return "CONFIRM"
 	case scResult:
@@ -274,7 +274,7 @@ func (m *model) contextKeys() []keyHint {
 	case scSourceActions:
 		return []keyHint{move, {"enter / space", "select action"}, back, {"q", "return to menu"}}
 	case scSources:
-		return []keyHint{move, {"enter", "open source"}, {"ctrl+r", "rename source"}, back}
+		return []keyHint{move, {"enter", "open source"}, {"ctrl+r", "set source alias"}, back}
 	case scSkills:
 		if m.filtering {
 			return []keyHint{{"type", "filter skills"}, {"enter", "return to skill list"}, {"esc", "clear filter"}}
@@ -287,7 +287,7 @@ func (m *model) contextKeys() []keyHint {
 	case scRemove:
 		return []keyHint{move, {"space", "mark source"}, {"enter", "remove marked sources"}, back}
 	case scMarkets:
-		return []keyHint{move, {"enter", "open marketplace"}, {"ctrl+r", "rename marketplace"}, {"x", "remove marketplace"}, {"u", "update marketplaces"}, back}
+		return []keyHint{move, {"enter", "open marketplace"}, {"ctrl+r", "set marketplace alias"}, {"x", "remove marketplace"}, {"u", "update marketplaces"}, back}
 	case scPlugins:
 		if m.filtering {
 			return []keyHint{{"type", "filter plugins"}, {"enter", "return to plugin list"}, {"esc", "clear filter"}}
