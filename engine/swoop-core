@@ -368,17 +368,23 @@ function walk(d,depth){
     const p=path.join(d,e.name);
     if(e.isDirectory()) walk(p,depth+1);
     else if(e.name.toLowerCase()==="skill.md"){
-      let raw=""; try{raw=fs.readFileSync(p,"utf8");}catch{}
-      const parts=raw.split(/^---\s*$/m);
-      const front=parts.length>=3?parts[1]:raw;
-      let name=field(front,"name")||path.basename(path.dirname(p));
-      let desc=field(front,"description");
-      if(desc.length>100) desc=desc.slice(0,99)+"\u2026";
+      const [name,desc]=info(p);
       process.stdout.write(name+"\t"+desc+"\n");
     }
   }
 }
-walk(process.argv[1],0);
+function info(p){
+  let raw=""; try{raw=fs.readFileSync(p,"utf8");}catch{}
+  const parts=raw.split(/^---\s*$/m);
+  const front=parts.length>=3?parts[1]:raw;
+  let name=field(front,"name")||path.basename(path.dirname(p));
+  let desc=field(front,"description");
+  if(desc.length>100) desc=desc.slice(0,99)+"\u2026";
+  return [name,desc];
+}
+// --name: print only the name of the skill in this one folder (Stars key on it)
+if(process.argv[2]==="--name") process.stdout.write(info(path.join(process.argv[1],"SKILL.md"))[0]+"\n");
+else walk(process.argv[1],0);
 '
 
 # enumerate SKILL.md via the GitHub trees API and fetch ONLY those files (no full
@@ -972,7 +978,7 @@ name_ok() {
   fi
 }
 # set the name: field in a skill's SKILL.md frontmatter (adds one if missing)
-set_skill_name() {  # $1 skill dir  $2 name
+set_skill_name() {  # $1 skill dir  $2 name  [$3 manifest to read, default $1/SKILL.md]
   local f="$1/SKILL.md" tmp; tmp="$(mktmp)"
   awk -v n="$2" '
     { l=$0; sub(/\r$/, "", l) }                     # CRLF manifests: compare without the CR
@@ -983,20 +989,15 @@ set_skill_name() {  # $1 skill dir  $2 name
     fm && l=="---" { if (!done) { print "name: " n cr; done=1 } fm=0 }
     { print }
     END { if (!done) { print "---"; print "name: " n; print "---" } }
-  ' "$f" > "$tmp" || return 1
+  ' "${3:-$f}" > "$tmp" || return 1
   # replace the file rather than write into it: a symlinked SKILL.md must not
   # carry the rename back to the person's original
   rm -f "$f" && cat "$tmp" > "$f"
 }
-# the skill name Stars use: the SKILL.md name: field, else the folder name
+# the skill name Stars use: read by the same walker that lists skills for starring
 skill_name() {  # $1 skill dir
-  local n; n="$(awk '
-    { sub(/\r$/, "") }
-    NR==1 && $0!="---" { exit } NR==1 { next }
-    $0=="---" { exit }
-    /^name:/ { sub(/^name:[ \t]*/, ""); gsub(/^["\047]|["\047][ \t]*$/, ""); print; exit }
-  ' "$1/SKILL.md" 2>/dev/null)"
-  printf '%s\n' "${n:-$(basename "$1")}"
+  have node || { printf '%serror:%s renaming a Library skill needs node (to read its name for Stars)\n' "$RED" "$RST" >&2; return 1; }
+  node -e "$NODE_WALK" "$1" --name
 }
 # a Star on a renamed Library skill follows it to the new name
 rename_library_star() {  # $1 old  $2 new
@@ -1016,8 +1017,17 @@ resolve_clash() {  # $1 add|stash  $2 incoming|library  $3 new name  $4 incoming
   [ "$(clash_state "$src")" = clash ] || die "no Name clash for $name"
   name_ok "$new" || return 1
   case "$how" in
-    incoming) dst="$LIBRARY/$new" ;;
-    library)  local old; old="$(skill_name "$LIBRARY/$name")"     # Stars key on this, not the folder
+    incoming) # stage the renamed copy and publish it only once the rewrite worked.
+              # Read the manifest through the original folder, where a relative
+              # SKILL.md link still resolves.
+              local stage; stage="$(mktmpd)/$new"
+              cp -R "$src" "$stage" || return 1
+              set_skill_name "$stage" "$new" "$src/SKILL.md" || return 1
+              mv "$stage" "$LIBRARY/$new" || return 1
+              if [ "$mode" = stash ]; then rm -rf "$src" || return 1; fi
+              printf '  %s%s%s %s -> Library as %s\n' "$GRN" "$([ "$mode" = add ] && echo copied || echo moved)" "$RST" "$name" "$new"
+              return 0 ;;
+    library)  local old; old="$(skill_name "$LIBRARY/$name")" || return 1   # Stars key on this, not the folder
               mv "$LIBRARY/$name" "$LIBRARY/$new" || return 1
               set_skill_name "$LIBRARY/$new" "$new" || return 1; rename_library_star "$old" "$new"
               printf '  %srenamed%s Library skill %s -> %s\n' "$GRN" "$RST" "$name" "$new" ;;
@@ -1028,8 +1038,7 @@ resolve_clash() {  # $1 add|stash  $2 incoming|library  $3 new name  $4 incoming
     stash) mv "$src" "$dst" || return 1 ;;
     *) die "unknown clash mode: $mode" ;;
   esac
-  if [ "$how" = incoming ]; then set_skill_name "$dst" "$new" || return 1; fi
-  printf '  %s%s%s %s -> Library as %s\n' "$GRN" "$([ "$mode" = add ] && echo copied || echo moved)" "$RST" "$name" "$(basename "$dst")"
+  printf '  %s%s%s %s -> Library as %s\n' "$GRN" "$([ "$mode" = add ] && echo copied || echo moved)" "$RST" "$name" "$name"
 }
 # ask the person how to resolve a Name clash. 0 resolved, 2 skipped, 1 failed.
 ask_clash() {  # $1 add|stash  $2 incoming dir

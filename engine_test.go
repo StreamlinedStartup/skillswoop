@@ -953,7 +953,7 @@ func TestEngineRenameLibraryStarUsesManifestName(t *testing.T) {
 		t.Skip("node is required by the engine skill walker (star)")
 	}
 	run, root, lib, config := clashEnv(t)
-	writeManifest(t, filepath.Join(root, "a", "notes"), "---\nname: meeting-notes\ndescription: First.\n---\n")
+	writeManifest(t, filepath.Join(root, "a", "notes"), "---\nname: meeting-notes  \ndescription: First.\n---\n") // trailing spaces, unquoted
 	writeManifest(t, filepath.Join(root, "b", "notes"), "---\nname: notes\ndescription: Second.\n---\n")
 	run("add", filepath.Join(root, "a", "notes"))
 	if out, err := run("star", lib, "meeting-notes"); err != nil {
@@ -1022,5 +1022,52 @@ func TestEngineResolveTakesNameLiterally(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(lib, "--help", "SKILL.md")); !strings.Contains(got, "name: --help\n") || !strings.Contains(got, "Second.") {
 		t.Fatalf("--help rename not on disk:\n%s", got)
+	}
+}
+
+func TestEngineRenameIncomingRelativeManifestLink(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	original := "---\nname: notes\ndescription: Relative.\n---\n"
+	if err := os.WriteFile(filepath.Join(root, "manifest.md"), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	incoming := filepath.Join(root, "notes")
+	os.MkdirAll(incoming, 0o755)
+	if err := os.Symlink("../manifest.md", filepath.Join(incoming, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("_resolve", "add", "incoming", "notes-rel", incoming); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	if got := readFile(t, filepath.Join(root, "manifest.md")); got != original {
+		t.Fatalf("original manifest changed:\n%s", got)
+	}
+	got := readFile(t, filepath.Join(lib, "notes-rel", "SKILL.md"))
+	if !strings.Contains(got, "name: notes-rel\n") || !strings.Contains(got, "Relative.") {
+		t.Fatalf("Library copy not renamed:\n%s", got)
+	}
+}
+
+func TestEngineRenameIncomingFailureLeavesNoFolder(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	writeSkill(t, filepath.Join(root, "b"), "notes", "Second.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	incoming := filepath.Join(root, "b", "skills", "notes")
+	manifest := filepath.Join(incoming, "SKILL.md")
+	if err := os.Chmod(manifest, 0o000); err != nil { // the rewrite cannot read it
+		t.Fatal(err)
+	}
+	defer os.Chmod(manifest, 0o644)
+	if os.Getuid() == 0 {
+		t.Skip("root can read a 0000 file")
+	}
+	if out, err := run("_resolve", "add", "incoming", "notes-b", incoming); err == nil {
+		t.Fatalf("unreadable manifest should fail:\n%s", out)
+	}
+	if _, err := os.Lstat(filepath.Join(lib, "notes-b")); !os.IsNotExist(err) {
+		t.Fatalf("a failed rename must not leave the Library folder: %v", err)
 	}
 }

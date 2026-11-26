@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -706,6 +707,9 @@ func TestAddClashScreenSkipChangesNothing(t *testing.T) {
 }
 
 func TestTidyClashScreenRenameLibrarySkill(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required to read the Library skill name for Stars")
+	}
 	m, root, lib := clashModel(t)
 	global := filepath.Join(root, "home", ".claude")
 	writeSkill(t, global, "notes", "Global copy.")
