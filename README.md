@@ -104,6 +104,8 @@ swoop --version
 
 The Library is a built-in source: it is always the first source, lists every skill in `~/.local/share/swoop/library/`, and cannot be removed (`swoop remove` refuses it).
 
+**Name clash.** When a skill entering the Library (by `swoop add <local skill>` or Tidy) has the same folder name as a different skill already there, swoop changes nothing and asks what to do: rename the incoming skill, rename the Library skill, or skip. A rename changes the folder name and the `name:` field in that skill's `SKILL.md` (for `add`, only the Library copy; your own folder is left as is), and a Star on a renamed Library skill follows it. New names may use only lowercase letters, digits, and hyphens and must not be taken. Adding a folder identical to the Library copy just says it is already there. With no terminal to ask in (piped output or `SWOOP_ASSUME_YES=1`), `swoop add` refuses with a non-zero exit, and `swoop stash` moves the other skills and lists each clashing one by name, leaving it in place. The TUI shows the same choice on its own screen.
+
 ## Plugins
 
 Both agents have native plugin systems (plugins bundle skills, hooks, MCP servers, and commands/agents for Claude; hooks auto-wire on install). swoop drives each agent's own plugin CLI and installs to every compatible configured agent at once. In the TUI: **Add a marketplace** → **Install plugins** (rows show `[hooks]` / `[mcp]` badges) → choose **This project** or **Globally** → **Remove plugins**.

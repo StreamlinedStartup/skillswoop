@@ -688,17 +688,26 @@ codex_hooks_state() {
 # ---- commands -----------------------------------------------------------
 cmd_add() {
   [ "$#" -ge 1 ] || die "usage: swoop add <owner/repo | url | path> ..."
-  mkdir -p "$CONFIG_DIR" "$LIBRARY"; local s
+  mkdir -p "$CONFIG_DIR" "$LIBRARY"; local s rc=0
   for s in "$@"; do
     if is_local "$s"; then
       local dir; dir="$(resolve_local "$s")"
       if [ -f "$dir/SKILL.md" ] && [ "$COPY_LOCAL" = 1 ]; then
-        local name dst; name="$(basename "$dir")"; dst="$LIBRARY/$name"
-        rm -rf "$dst"; cp -R "$dir" "$dst"
-        printf '  %scopied%s %s -> Library\n' "$GRN" "$RST" "$name"
+        local name; name="$(basename "$dir")"
+        case "$(clash_state "$dir")" in
+          none)  cp -R "$dir" "$LIBRARY/$name"; printf '  %scopied%s %s -> Library\n' "$GRN" "$RST" "$name" ;;
+          same)  printf '  %s is already in the Library (identical) - nothing changed\n' "$name" ;;
+          clash) if can_ask; then ask_clash add "$dir" || [ "$?" = 2 ] || rc=1
+                 else
+                   printf '%serror:%s Name clash: the Library already has a different skill named %s. Nothing was changed.\n' "$RED" "$RST" "$name" >&2
+                   printf '  Run `swoop add %s` in a terminal to rename the incoming skill, rename the Library skill, or skip.\n' "$dir" >&2
+                   rc=1
+                 fi ;;
+        esac
       else save_source "$dir"; printf '  %sremembered%s local path %s\n' "$GRN" "$RST" "$dir"; fi
     else save_source "$s"; printf '  %sremembered%s %s\n' "$GRN" "$RST" "$s"; fi
   done
+  return "$rc"
 }
 
 cmd_remove() {
@@ -879,7 +888,53 @@ project_dir_for() {
 # move existing GLOBAL skills out of the auto-scanned dirs and into the library
 cmd_stash() {
   mkdir -p "$LIBRARY"
-  local a dir e nm kind; local -a moves=()
+  local m; local -a moves=()
+  while IFS= read -r m; do moves+=( "$m" ); done < <(tidy_entries)
+  if [ "${#moves[@]}" -eq 0 ]; then echo "No global skills found to tidy."; return 0; fi
+
+  printf '%sTidy will declutter your global agent skill dirs%s\n' "$BOLD" "$RST"
+  printf '(symlinks are unlinked; real skill folders move into your library):\n'
+  local src nm a kind act; for m in "${moves[@]}"; do IFS='|' read -r src nm a kind <<< "$m"
+    if [ "$kind" = link ]; then act="unlink"
+    elif [ "$(clash_state "$src")" = clash ]; then act="clash "   # Name clash: asks (or stays) when run
+    else act="move  "; fi
+    printf '  %s%s%s %-26s %sfrom %s%s\n' "$DIM" "$act" "$RST" "$nm" "$DIM" "$src" "$RST"; done
+  if [ -n "$DRYRUN" ]; then printf '%s(dry-run — nothing changed)%s\n' "$YLW" "$RST"; return 0; fi
+  ui_confirm "Tidy these ${#moves[@]} entr(ies) now?" || { echo "aborted."; return 0; }
+
+  local moved=0 unlinked=0 kept=0 failed=0; local -a clashes=()
+  for m in "${moves[@]}"; do IFS='|' read -r src nm a kind <<< "$m"
+    if [ "$kind" = link ]; then                        # just remove the pointer; real content lives elsewhere
+      if rm "$src" 2>/dev/null; then unlinked=$((unlinked+1)); printf '  %sunlinked%s %s %s(symlink)%s\n' "$GRN" "$RST" "$nm" "$DIM" "$RST"
+      else failed=$((failed+1)); printf '  %sfailed%s %s\n' "$RED" "$RST" "$nm"; fi
+      continue
+    fi
+    case "$(clash_state "$src")" in
+      same)
+        kept=$((kept+1)); printf '  %skept%s %s %s(already in the Library, identical - left in place)%s\n' "$YLW" "$RST" "$nm" "$DIM" "$RST" ;;
+      clash)
+        if can_ask; then
+          local r=0; ask_clash stash "$src" || r=$?
+          case "$r" in 0) moved=$((moved+1)) ;; 2) kept=$((kept+1)) ;; *) failed=$((failed+1)) ;; esac
+        else
+          kept=$((kept+1)); clashes+=( "$nm" )
+          printf '  %sclash%s %s %s(the Library already has a different skill named %s - left in place)%s\n' "$YLW" "$RST" "$nm" "$DIM" "$nm" "$RST"
+        fi ;;
+      *)
+        if mv "$src" "$LIBRARY/$nm" 2>/dev/null; then moved=$((moved+1)); printf '  %smoved%s %s\n' "$GRN" "$RST" "$nm"
+        else failed=$((failed+1)); printf '  %sfailed%s %s\n' "$RED" "$RST" "$nm"; fi ;;
+    esac
+  done
+  printf '%sDone.%s moved %s · unlinked %s · not moved %s · failed %s\n' "$GRN" "$RST" "$moved" "$unlinked" "$kept" "$failed"
+  if [ "${#clashes[@]}" -gt 0 ]; then
+    printf '%sName clash:%s %s\n' "$YLW" "$RST" "${clashes[*]}"
+    printf 'Run `swoop stash` in a terminal to rename one of each pair, or skip.\n'
+  fi
+}
+
+# every global entry Tidy would touch, as "path|name|agent|kind" (kind: link|dir)
+tidy_entries() {
+  local a dir e nm kind
   for a in $(load_agents); do
     dir="$(global_dir_for "$a")" || { printf '  %sskip %s (tidy not configured for it)%s\n' "$DIM" "$a" "$RST" >&2; continue; }
     [ -d "$dir" ] || continue
@@ -889,32 +944,106 @@ cmd_stash() {
       if   [ -L "$e" ]; then kind=link                 # a symlink (e.g. managed by another tool)
       elif [ -d "$e" ] && [ -f "$e/SKILL.md" ]; then kind=dir
       else continue; fi                                # not a skill — leave it alone
-      moves+=( "$e|$nm|$a|$kind" )
+      printf '%s|%s|%s|%s\n' "$e" "$nm" "$a" "$kind"
     done
   done
-  if [ "${#moves[@]}" -eq 0 ]; then echo "No global skills found to tidy."; return 0; fi
+}
 
-  printf '%sTidy will declutter your global agent skill dirs%s\n' "$BOLD" "$RST"
-  printf '(symlinks are unlinked; real skill folders move into your library):\n'
-  local m src act; for m in "${moves[@]}"; do IFS='|' read -r src nm a kind <<< "$m"
-    [ "$kind" = link ] && act="unlink" || act="move  "
-    printf '  %s%s%s %-26s %sfrom %s%s\n' "$DIM" "$act" "$RST" "$nm" "$DIM" "$src" "$RST"; done
-  if [ -n "$DRYRUN" ]; then printf '%s(dry-run — nothing changed)%s\n' "$YLW" "$RST"; return 0; fi
-  ui_confirm "Tidy these ${#moves[@]} entr(ies) now?" || { echo "aborted."; return 0; }
-
-  local moved=0 unlinked=0 skipped=0 failed=0
-  for m in "${moves[@]}"; do IFS='|' read -r src nm a kind <<< "$m"
-    if [ "$kind" = link ]; then                        # just remove the pointer; real content lives elsewhere
-      if rm "$src" 2>/dev/null; then unlinked=$((unlinked+1)); printf '  %sunlinked%s %s %s(symlink)%s\n' "$GRN" "$RST" "$nm" "$DIM" "$RST"
-      else failed=$((failed+1)); printf '  %sfailed%s %s\n' "$RED" "$RST" "$nm"; fi
-      continue
-    fi
-    local dst="$LIBRARY/$nm"
-    if [ -e "$dst" ]; then skipped=$((skipped+1)); printf '  %skept%s %s %s(already in library — left in place)%s\n' "$YLW" "$RST" "$nm" "$DIM" "$RST"; continue; fi
-    if mv "$src" "$dst" 2>/dev/null; then moved=$((moved+1)); printf '  %smoved%s %s\n' "$GRN" "$RST" "$nm"
-    else failed=$((failed+1)); printf '  %sfailed%s %s\n' "$RED" "$RST" "$nm"; fi
+# ---- Library Name clash ---------------------------------------------------
+# A skill entering the Library clashes when the Library already holds a folder
+# with the same name and different contents. Identical folders are not a clash.
+clash_state() {  # $1 incoming skill dir; prints none | same | clash
+  local dst; dst="$LIBRARY/$(basename "$1")"
+  if [ ! -e "$dst" ] && [ ! -L "$dst" ]; then echo none
+  elif diff -rq "$1" "$dst" >/dev/null 2>&1; then echo same
+  else echo clash; fi
+}
+# the engine can only ask when a person is at a terminal and no front-end is driving it
+can_ask() { [ -z "${SWOOP_ASSUME_YES:-}" ] && [ -t 1 ] && tty_ok; }
+# a new Library name: lowercase letters, digits and hyphens, not already taken
+name_ok() {
+  case "$1" in
+    '')           printf '  the new name cannot be empty\n' >&2; return 1 ;;
+    *[!a-z0-9-]*) printf '  use only lowercase letters, digits, and hyphens: %s\n' "$1" >&2; return 1 ;;
+  esac
+  if [ -e "$LIBRARY/$1" ] || [ -L "$LIBRARY/$1" ]; then
+    printf '  the Library already has a skill named %s\n' "$1" >&2; return 1
+  fi
+}
+# set the name: field in a skill's SKILL.md frontmatter (adds one if missing)
+set_skill_name() {  # $1 skill dir  $2 name
+  local f="$1/SKILL.md" tmp; tmp="$(mktmp)"
+  awk -v n="$2" '
+    NR==1 && $0=="---" { fm=1; print; next }
+    NR==1 { print "---"; print "name: " n; print "---"; done=1 }
+    fm && !done && /^name:/ { print "name: " n; done=1; next }
+    fm && $0=="---" { if (!done) { print "name: " n; done=1 } fm=0 }
+    { print }
+    END { if (!done) { print "---"; print "name: " n; print "---" } }
+  ' "$f" > "$tmp" && cat "$tmp" > "$f"
+}
+# a Star on a renamed Library skill follows it to the new name
+rename_library_star() {  # $1 old  $2 new
+  [ -f "$STARS" ] || return 0
+  canon_stars
+  local tmp; tmp="$(mktmp)"
+  awk -F '\t' -v OFS='\t' -v lib="$LIBRARY" -v old="$1" -v new="$2" '
+    $1==lib && $2==old { $2=new } { print }' "$STARS" | awk -F '\t' '!seen[$1 FS $2]++' > "$tmp"
+  mv "$tmp" "$STARS"
+}
+# resolve one Name clash by renaming one side, then bring the incoming skill in.
+# add copies it (the person's folder is left as is); stash moves it.
+resolve_clash() {  # $1 add|stash  $2 incoming|library  $3 new name  $4 incoming dir
+  local mode="$1" how="$2" new="$3" src="$4" name dst
+  [ -f "$src/SKILL.md" ] || die "not a skill folder: $src"
+  name="$(basename "$src")"; dst="$LIBRARY/$name"
+  [ "$(clash_state "$src")" = clash ] || die "no Name clash for $name"
+  name_ok "$new" || return 1
+  case "$how" in
+    incoming) dst="$LIBRARY/$new" ;;
+    library)  mv "$LIBRARY/$name" "$LIBRARY/$new" || return 1
+              set_skill_name "$LIBRARY/$new" "$new"; rename_library_star "$name" "$new"
+              printf '  %srenamed%s Library skill %s -> %s\n' "$GRN" "$RST" "$name" "$new" ;;
+    *) die "unknown clash choice: $how" ;;
+  esac
+  case "$mode" in
+    add)   cp -R "$src" "$dst" || return 1 ;;
+    stash) mv "$src" "$dst" || return 1 ;;
+    *) die "unknown clash mode: $mode" ;;
+  esac
+  [ "$how" = incoming ] && set_skill_name "$dst" "$new"
+  printf '  %s%s%s %s -> Library as %s\n' "$GRN" "$([ "$mode" = add ] && echo copied || echo moved)" "$RST" "$name" "$(basename "$dst")"
+}
+# ask the person how to resolve a Name clash. 0 resolved, 2 skipped, 1 failed.
+ask_clash() {  # $1 add|stash  $2 incoming dir
+  local name how new choice; name="$(basename "$2")"
+  printf '%sName clash:%s the Library already has a different skill named %s%s%s.\n' "$YLW" "$RST" "$BOLD" "$name" "$RST" >&2
+  choice="$(printf '%s\n' "rename the incoming skill" "rename the Library skill" "skip" | menu1 "What should swoop do with $name?")" || choice=""
+  case "$choice" in
+    "rename the incoming skill") how=incoming ;;
+    "rename the Library skill")  how=library ;;
+    *) printf '  skipped %s\n' "$name"; return 2 ;;
+  esac
+  while :; do
+    new="$(ui_input "New name:" "lowercase-letters-digits-hyphens")" || { printf '  skipped %s\n' "$name"; return 2; }
+    name_ok "$new" && break
   done
-  printf '%sDone.%s moved %s · unlinked %s · kept %s · failed %s\n' "$GRN" "$RST" "$moved" "$unlinked" "$skipped" "$failed"
+  resolve_clash "$1" "$how" "$new" "$2"
+}
+# machine-readable clash list for the TUI: "path<TAB>name" per clashing skill
+list_clashes() {  # $1 add|stash  [$2 path for add]
+  local src nm a kind dir
+  case "$1" in
+    add)   is_local "${2:-}" || return 0
+           dir="$(resolve_local "$2")"
+           [ -f "$dir/SKILL.md" ] && [ "$(clash_state "$dir")" = clash ] && printf '%s\t%s\n' "$dir" "$(basename "$dir")"
+           return 0 ;;
+    stash) while IFS='|' read -r src nm a kind; do
+             [ "$kind" = dir ] && [ "$(clash_state "$src")" = clash ] && printf '%s\t%s\n' "$src" "$nm"
+           done < <(tidy_entries 2>/dev/null)
+           return 0 ;;
+  esac
+  die "usage: swoop _clashes add <path> | stash"
 }
 
 # ---- plugin marketplaces --------------------------------------------------
@@ -1187,7 +1316,7 @@ while [ $# -gt 0 ]; do
     --dry-run)   DRYRUN=1 ;;
     --no-hooks-enable) NO_HOOKS_ENABLE=1 ;;
     -h|--help)   usage; exit 0 ;;
-    add|save|use|install|update|upgrade|browse|list|ls|stars|star|unstar|remove|rm|agents|stash|migrate|menu|mkt|marketplace|plugin|plugins|_skills|_search|_sources|_projects|_mkts|_plugins|_plugins_installed|_codex_hooks)
+    add|save|use|install|update|upgrade|browse|list|ls|stars|star|unstar|remove|rm|agents|stash|migrate|menu|mkt|marketplace|plugin|plugins|_skills|_search|_sources|_projects|_mkts|_plugins|_plugins_installed|_codex_hooks|_clashes|_resolve)
       if [ -z "$cmd" ]; then cmd="$1"; else ARGS+=("$1"); fi ;;
     *) ARGS+=("$1") ;;
   esac
@@ -1225,5 +1354,9 @@ case "$cmd" in
                    list_plugins_in "${ARGS[0]}" ;;                # header + name<TAB>desc<TAB>flags
   _plugins_installed) plugins_installed ;;                        # name@mkt<TAB>agents<TAB>desc
   _codex_hooks)    codex_hooks_state ;;                           # on / off / n/a
+  _clashes)        list_clashes ${ARGS[@]+"${ARGS[@]}"} ;;          # path<TAB>name per Name clash
+  _resolve)        [ "${#ARGS[@]}" -eq 4 ] || die "usage: swoop _resolve <add|stash> <incoming|library> <new-name> <path>"
+                   mkdir -p "$LIBRARY"
+                   resolve_clash "${ARGS[0]}" "${ARGS[1]}" "${ARGS[2]}" "$(resolve_local "${ARGS[3]}")" ;;
   *) usage; exit 1 ;;
 esac
