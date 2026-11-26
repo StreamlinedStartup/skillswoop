@@ -52,7 +52,7 @@ _Avoid_: Scope
 
 **Tidy**:
 Moving global **Skills** out of the **Agents**' global folders into the **Library**.
-_Avoid_: Stash, migrate
+_Avoid_: Migrate
 
 **Rename**:
 Changing a **Skill**'s real name, the name **Agents** see.
