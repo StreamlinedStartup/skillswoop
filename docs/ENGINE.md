@@ -24,7 +24,7 @@ swoop-core <subcommand> [args] # non-interactive, driven by the TUI or CLI
 | Command | Signature | What it does |
 |---------|-----------|--------------|
 | `menu` | (no args) | Interactive home screen. Loops until "Quit". |
-| `add` | `add <source>...` | Remember one or more sources. A local skill folder is copied into the Library (no new source is saved); other local paths are remembered as sources. |
+| `add` | `add <source>...` | Remember one or more sources. A local skill folder is copied into the Library (no new source is saved); other local paths are remembered as sources. A folder identical to the Library copy is a no-op (exit 0). On a Name clash (same folder name, different contents) nothing changes: in a terminal swoop asks to rename the incoming skill, rename the Library skill, or skip; with no terminal (piped output or `SWOOP_ASSUME_YES`) it prints the refusal and exits non-zero. |
 | `use` | `use <source>... [-- args]` | Install skills from a source. Without `--`, shows an interactive picker. With `-- --skill X --skill Y -y`, installs specific skills non-interactively. |
 | `update` | `update [--all] [skill...]` | Refresh installed skills from GitHub. `--all` walks every known project dir. |
 | `browse` | `browse [query]` | Search skills.sh. Shows results, lets you remember/install repos. |
@@ -34,7 +34,7 @@ swoop-core <subcommand> [args] # non-interactive, driven by the TUI or CLI
 | `list` | (no args) | Print agents, scope, the Library, and saved sources. |
 | `remove` | `remove [source]...` | Remove saved sources. Interactive picker if no args. The Library is built in: naming it prints an error and exits non-zero; other sources in the same call are still removed. Stars of removed sources are deleted too; if there are any, it first lists them (skill and source) and asks once for all sources. No, or empty input, removes nothing and prints `nothing removed.`; `SWOOP_ASSUME_YES` skips the question. |
 | `agents` | `agents [name]...` | Print or set default target agents. Default: `claude-code codex`. |
-| `stash` | (no args) | Move global skills out of `~/.claude/skills` etc. into the Library (no new source is saved). One-time declutter. |
+| `stash` | (no args) | Move global skills out of `~/.claude/skills` etc. into the Library (no new source is saved). One-time declutter. A skill identical to its Library copy stays in place. On a Name clash it asks the same three choices as `add` in a terminal; with no terminal it skips the confirmation, moves the rest, leaves each clashing skill in place, counts it as "not moved", and lists it under `Name clash:`. `--dry-run` marks clashing skills `clash`. |
 | `mkt` | `mkt add <source>... \| list \| remove <source>... \| update` | Manage plugin marketplaces. `add` detects which manifest format(s) a repo provides, registers it with each compatible agent's native CLI (`claude plugin marketplace add` / `codex plugin marketplace add`), warns about skipped agents, and caches the marketplace names. `update` runs `claude plugin marketplace update` + `codex plugin marketplace upgrade`. |
 | `plugin` | `plugin install <source> <plugin>... \| list \| remove <plugin[@marketplace]>...` | Install/list/remove plugins via the native CLIs. Unknown source on install offers `mkt add` first. |
 | `_skills` | `_skills <source>` | Machine-readable: print `name<TAB>desc` for each skill in a source. Used by the TUI. |
@@ -44,6 +44,8 @@ swoop-core <subcommand> [args] # non-interactive, driven by the TUI or CLI
 | `_mkts` | `_mkts` | Machine-readable: dump the marketplaces file. (Engine has it; TUI reads the file directly instead.) |
 | `_plugins` | `_plugins <source>` | Machine-readable: print an `@marketplace<TAB>claude_name<TAB>codex_name` header, then `name<TAB>desc<TAB>flags<TAB>relpath` per plugin (flags: `claude,codex,hooks,mcp,commands,agents,skills`; relpath = repo-local plugin dir, empty for external sources). Used by the TUI. |
 | `_plugins_installed` | `_plugins_installed` | Machine-readable: merge `claude plugin list --json` + `codex plugin list --json` into `name@marketplace<TAB>agents<TAB>desc`. Tolerates either CLI missing (warns on stderr). |
+| `_clashes` | `_clashes add <path>` / `_clashes stash` | Machine-readable: print `path<TAB>name` for each skill that would hit a Name clash on `add` (one path) or Tidy (the global skill dirs). |
+| `_resolve` | `_resolve <add\|stash> <incoming\|library> <new-name> <path>` | Resolve one Name clash: rename the incoming skill or the Library skill (folder and `SKILL.md` `name:`, plus any Star on the Library skill), then copy (`add`) or move (`stash`) the incoming skill in. Rejects an empty, taken, or non `[a-z0-9-]` name. |
 | `_codex_hooks` | `_codex_hooks` | Machine-readable: print the codex `features.hooks` state — `on`, `off`, or `n/a`. Any parse failure is `n/a`; it never blocks installs. |
 
 Flags that apply anywhere:
@@ -233,10 +235,10 @@ The TUI uses the machine-readable commands for data, then drives user-facing com
 | Search | `_search <query>` |
 | Install | `use <source> -- --skill X -y` |
 | Update | `update` / `update --all` |
-| Add source | `add <source>` |
+| Add source | `_clashes add <source>`, then `add <source>`, or the Name clash screen and `_resolve add ...` |
 | Remove | `remove <source>...` |
 | Browse results | `browse <query>` → remembers + installs |
-| Tidy global | `stash` |
+| Tidy global | `stash`, then `_clashes stash`; each clash opens the Name clash screen and `_resolve stash ...` |
 | Set agents | `agents <names>...` |
 | Marketplace list | (reads `~/.config/swoop/marketplaces` directly via `loadMarketplaces()`) |
 | Plugins picker | `_plugins <source>` |

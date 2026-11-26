@@ -182,7 +182,7 @@ func actTidy(m *model) (tea.Model, tea.Cmd) {
 	m.confirmCmd = func(mm *model) tea.Cmd {
 		mm.busyTitle = "tidying global skills"
 		mm.screen = scRunning
-		return opCmd("tidy global skills", "stash")
+		return tidyCmd()
 	}
 	return m, nil
 }

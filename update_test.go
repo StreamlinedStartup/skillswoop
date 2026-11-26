@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -598,6 +599,193 @@ func TestLegacyLibraryStarIsTheLibraryStar(t *testing.T) {
 	actRemove(m)
 	if len(m.pick.items) != 1 || m.pick.items[0].id != nested {
 		t.Fatalf("nested source should be removable: %#v", m.pick.items)
+	}
+}
+
+// clashModel points the TUI at the repo engine with a temp config, data and HOME.
+func clashModel(t *testing.T) (*model, string, string) {
+	t.Helper()
+	root := t.TempDir()
+	eng, err := filepath.Abs("engine/swoop-core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SWOOP_CORE", eng)
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
+	writeSkill(t, filepath.Join(root, "lib"), "notes", "Library copy.")
+	if out, err := core("add", filepath.Join(root, "lib", "skills", "notes")); err != nil {
+		t.Fatalf("seed add failed: %v\n%s", err, out)
+	}
+	m := newModel()
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	return mm.(*model), root, libraryDir()
+}
+
+// step feeds a message and runs any returned command once, like the runtime.
+func step(t *testing.T, m *model, msg tea.Msg) *model {
+	t.Helper()
+	mm, cmd := m.Update(msg)
+	m = mm.(*model)
+	if m.screen == scRunning && cmd != nil { // only engine runs, never input blink ticks
+		mm, _ = m.Update(cmd())
+		m = mm.(*model)
+	}
+	return m
+}
+
+func typeText(t *testing.T, m *model, s string) *model {
+	for _, r := range s {
+		mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) // skip the cursor-blink cmd
+		m = mm.(*model)
+	}
+	return m
+}
+
+func TestAddClashScreenRenameIncoming(t *testing.T) {
+	m, root, lib := clashModel(t)
+	writeSkill(t, filepath.Join(root, "other"), "notes", "Incoming copy.")
+	incoming := filepath.Join(root, "other", "skills", "notes")
+
+	msg := addSourceCmd(incoming)()
+	cm, ok := msg.(clashMsg)
+	if !ok || len(cm.clashes) != 1 || cm.clashes[0].name != "notes" {
+		t.Fatalf("add should report a Name clash, got %#v", msg)
+	}
+	m = step(t, m, cm)
+	if m.screen != scClash {
+		t.Fatalf("screen = %d, want scClash", m.screen)
+	}
+	m.layout()
+	body := m.buildBody()
+	for _, want := range clashChoices {
+		if !strings.Contains(body, want) {
+			t.Fatalf("clash screen missing %q:\n%s", want, body)
+		}
+	}
+
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // rename incoming
+	if !m.clashNaming {
+		t.Fatal("expected the name input")
+	}
+	m = typeText(t, m, "notes")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.screen != scClash || !strings.Contains(m.clashErr, "already has") {
+		t.Fatalf("taken name should be rejected, err=%q screen=%d", m.clashErr, m.screen)
+	}
+	m.input.SetValue("")
+	m = typeText(t, m, "notes-two")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.screen != scResult || m.resultErr {
+		t.Fatalf("screen = %d err = %v, want a clean result", m.screen, m.resultErr)
+	}
+	if b, _ := os.ReadFile(filepath.Join(lib, "notes-two", "SKILL.md")); !strings.Contains(string(b), "name: notes-two\n") {
+		t.Fatalf("incoming skill not renamed:\n%s", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(lib, "notes", "SKILL.md")); !strings.Contains(string(b), "Library copy.") {
+		t.Fatal("Library skill must keep its name")
+	}
+}
+
+func TestAddClashScreenSkipChangesNothing(t *testing.T) {
+	m, root, lib := clashModel(t)
+	writeSkill(t, filepath.Join(root, "other"), "notes", "Incoming copy.")
+	m = step(t, m, addSourceCmd(filepath.Join(root, "other", "skills", "notes"))())
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.screen != scResult {
+		t.Fatalf("screen = %d, want scResult", m.screen)
+	}
+	ents, _ := os.ReadDir(lib)
+	if len(ents) != 1 {
+		t.Fatalf("skip must not add anything; Library has %d entries", len(ents))
+	}
+}
+
+func TestTidyClashScreenRenameLibrarySkill(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required to read the Library skill name for Stars")
+	}
+	m, root, lib := clashModel(t)
+	global := filepath.Join(root, "home", ".claude")
+	writeSkill(t, global, "notes", "Global copy.")
+	writeSkill(t, global, "fresh", "No clash.")
+
+	msg := tidyCmd()()
+	cm, ok := msg.(clashMsg)
+	if !ok || len(cm.clashes) != 1 || cm.clashes[0].mode != "stash" {
+		t.Fatalf("tidy should report one Name clash, got %#v", msg)
+	}
+	m = step(t, m, cm)
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyDown}) // rename the Library skill
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = typeText(t, m, "notes-lib")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.screen != scResult || m.resultErr {
+		t.Fatalf("screen = %d err = %v, want a clean result", m.screen, m.resultErr)
+	}
+	if b, _ := os.ReadFile(filepath.Join(lib, "notes-lib", "SKILL.md")); !strings.Contains(string(b), "name: notes-lib\n") || !strings.Contains(string(b), "Library copy.") {
+		t.Fatalf("Library skill not renamed:\n%s", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(lib, "notes", "SKILL.md")); !strings.Contains(string(b), "Global copy.") {
+		t.Fatal("global skill should take the original name")
+	}
+	if _, err := os.Stat(filepath.Join(global, "skills", "notes")); !os.IsNotExist(err) {
+		t.Fatal("Tidy should move the global skill out")
+	}
+	if _, err := os.Stat(filepath.Join(lib, "fresh")); err != nil {
+		t.Fatal("non-clashing skill should be moved")
+	}
+}
+
+func TestClashNameWithSpacesIsRejected(t *testing.T) {
+	m, root, lib := clashModel(t)
+	writeSkill(t, filepath.Join(root, "other"), "notes", "Incoming copy.")
+	m = step(t, m, addSourceCmd(filepath.Join(root, "other", "skills", "notes"))())
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.input.SetValue(" notes-two ")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.screen != scClash || !m.clashNaming || m.clashErr == "" {
+		t.Fatalf("spaced name should keep the prompt open: screen=%d naming=%v err=%q", m.screen, m.clashNaming, m.clashErr)
+	}
+	if _, err := os.Stat(filepath.Join(lib, "notes-two")); err == nil {
+		t.Fatal("nothing should be renamed")
+	}
+}
+
+func TestTidyClashSummaryCountsChoices(t *testing.T) {
+	m, root, _ := clashModel(t)
+	writeSkill(t, filepath.Join(root, "lib2"), "memo", "Library memo.")
+	if out, err := core("add", filepath.Join(root, "lib2", "skills", "memo")); err != nil {
+		t.Fatalf("seed add failed: %v\n%s", err, out)
+	}
+	global := filepath.Join(root, "home", ".claude")
+	writeSkill(t, global, "memo", "Global memo.")
+	writeSkill(t, global, "notes", "Global notes.")
+	writeSkill(t, global, "fresh", "No clash.")
+
+	m = step(t, m, tidyCmd()())
+	if len(m.clashes) != 2 {
+		t.Fatalf("want 2 clashes, got %d", len(m.clashes))
+	}
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // memo: rename incoming
+	m = typeText(t, m, "memo-global")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEsc}) // notes: skip
+	if m.screen != scResult {
+		t.Fatalf("screen = %d, want scResult", m.screen)
+	}
+	body := m.vp.View()
+	if !strings.Contains(body, "Done. moved 2 · unlinked 0 · not moved 1 · failed 0") {
+		t.Fatalf("final summary should count the rename and the skip:\n%s", body)
+	}
+	if strings.Count(body, "Done.") != 1 || strings.Contains(body, "Run `swoop stash`") || !strings.Contains(body, "skipped: notes") {
+		t.Fatalf("stale first-pass summary in result:\n%s", body)
 	}
 }
 

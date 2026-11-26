@@ -179,6 +179,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = scBrowseResults
 		return m, nil
 
+	case clashMsg:
+		m.startClashes(msg)
+		return m, nil
+
+	case clashStepMsg:
+		m.onClashStep(msg)
+		return m, nil
+
 	case opDoneMsg:
 		m.screen = scResult
 		m.resultErr = msg.err != nil
@@ -217,7 +225,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// route to active text input / viewport for non-key msgs
-	if m.screen == scAdd || m.screen == scAgents || m.screen == scBrowseInput || m.screen == scRename {
+	if m.screen == scAdd || m.screen == scAgents || m.screen == scBrowseInput || m.screen == scRename ||
+		(m.screen == scClash && m.clashNaming) {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -660,7 +669,7 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.busyTitle = "adding source"
 			m.screen = scRunning
-			return m, opCmd("added source", "add", v)
+			return m, addSourceCmd(v)
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
@@ -714,6 +723,9 @@ func (m *model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)
 		return m, cmd
+
+	case scClash:
+		return m.onClashKey(msg)
 
 	case scRunning:
 		// ignore keys while working (except ctrl+c handled above)

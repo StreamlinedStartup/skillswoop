@@ -125,6 +125,9 @@ func (m *model) buildBody() string {
 	case scAgents:
 		return m.inputBody("DEFAULT agents", "which agents to target on install")
 
+	case scClash:
+		return m.clashBody()
+
 	case scConfirm:
 		return heading("CONFIRM", "") + "\n\n" +
 			rowCursor.Render(m.confirmMsg) + "\n\n" +
@@ -246,6 +249,8 @@ func (m *model) contextLabel() string {
 		return "SET ALIAS"
 	case scConfirm:
 		return "CONFIRM"
+	case scClash:
+		return "NAME CLASH"
 	case scResult:
 		return "RESULT"
 	case scMarkets:
@@ -303,6 +308,11 @@ func (m *model) contextKeys() []keyHint {
 		return []keyHint{{"type", "enter search keywords"}, {"enter", "search skills.sh"}, {"esc", "cancel"}}
 	case scAdd, scAgents:
 		return []keyHint{{"type", "edit value"}, {"enter", "confirm"}, {"esc", "cancel"}}
+	case scClash:
+		if m.clashNaming {
+			return []keyHint{{"type", "new name"}, {"enter", "rename"}, {"esc", "back to choices"}}
+		}
+		return []keyHint{move, {"enter", "choose"}, {"esc", "skip this skill"}}
 	case scConfirm:
 		return []keyHint{{"y / enter", "confirm"}, {"n", "decline"}, {"esc", "cancel"}}
 	case scResult:

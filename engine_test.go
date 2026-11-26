@@ -756,6 +756,366 @@ func TestEngineLibraryEdgeCases(t *testing.T) {
 	}
 }
 
+// clashEnv runs the engine with no terminal (CombinedOutput pipes stdout), so
+// a Name clash is refused rather than asked about.
+func clashEnv(t *testing.T) (run func(args ...string) (string, error), root, lib, config string) {
+	t.Helper()
+	root = t.TempDir()
+	config = filepath.Join(root, "config")
+	data := filepath.Join(root, "data")
+	lib = filepath.Join(data, "swoop", "library")
+	run = func(args ...string) (string, error) {
+		cmd := exec.Command("bash", append([]string{"engine/swoop-core"}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"HOME="+filepath.Join(root, "home"),
+			"XDG_CONFIG_HOME="+config,
+			"XDG_DATA_HOME="+data,
+			"NO_COLOR=1",
+		)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	return run, root, lib, config
+}
+
+func readFile(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestEngineAddNameClashRefusedWithoutTerminal(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	writeSkill(t, filepath.Join(root, "b"), "notes", "Second.")
+	if out, err := run("add", filepath.Join(root, "a", "skills", "notes")); err != nil {
+		t.Fatalf("first add failed: %v\n%s", err, out)
+	}
+	before := readFile(t, filepath.Join(lib, "notes", "SKILL.md"))
+
+	out, err := run("add", filepath.Join(root, "b", "skills", "notes"))
+	if err == nil {
+		t.Fatalf("clashing add should exit non-zero:\n%s", out)
+	}
+	if !strings.Contains(out, "Name clash") || !strings.Contains(out, "notes") ||
+		!strings.Contains(out, "rename the incoming skill") || !strings.Contains(out, "rename the Library skill") || !strings.Contains(out, "skip") {
+		t.Fatalf("refusal should name the skill and the three choices:\n%s", out)
+	}
+	if got := readFile(t, filepath.Join(lib, "notes", "SKILL.md")); got != before {
+		t.Fatalf("Library skill changed:\n%s", got)
+	}
+}
+
+func TestEngineAddIdenticalIsNoOp(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, root, "notes", "Same.")
+	src := filepath.Join(root, "skills", "notes")
+	if out, err := run("add", src); err != nil {
+		t.Fatalf("first add failed: %v\n%s", err, out)
+	}
+	out, err := run("add", src)
+	if err != nil {
+		t.Fatalf("identical re-add should exit 0: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "already in the Library") {
+		t.Fatalf("expected an already-in-Library note:\n%s", out)
+	}
+	ents, _ := os.ReadDir(lib)
+	if len(ents) != 1 {
+		t.Fatalf("Library should hold one skill, has %d", len(ents))
+	}
+}
+
+func TestEngineResolveRenameIncoming(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	writeSkill(t, filepath.Join(root, "b"), "notes", "Second.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	incoming := filepath.Join(root, "b", "skills", "notes")
+	original := readFile(t, filepath.Join(incoming, "SKILL.md"))
+
+	for _, bad := range []string{"", "Bad", "has space", "notes"} {
+		if out, err := run("_resolve", "add", "incoming", bad, incoming); err == nil {
+			t.Fatalf("new name %q should be rejected:\n%s", bad, out)
+		}
+	}
+	if out, err := run("_resolve", "add", "incoming", "notes-b", incoming); err != nil {
+		t.Fatalf("rename incoming failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(lib, "notes", "SKILL.md")), "First.") {
+		t.Fatal("old Library skill should stay under its name")
+	}
+	got := readFile(t, filepath.Join(lib, "notes-b", "SKILL.md"))
+	if !strings.Contains(got, "name: notes-b\n") || !strings.Contains(got, "Second.") {
+		t.Fatalf("incoming skill not renamed in the Library:\n%s", got)
+	}
+	if readFile(t, filepath.Join(incoming, "SKILL.md")) != original {
+		t.Fatal("the person's original folder must not change")
+	}
+}
+
+func TestEngineResolveRenameLibrarySkillMovesStar(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required by the engine skill walker (star)")
+	}
+	run, root, lib, config := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	writeSkill(t, filepath.Join(root, "b"), "notes", "Second.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	if out, err := run("star", lib, "notes"); err != nil {
+		t.Fatalf("star failed: %v\n%s", err, out)
+	}
+	if out, err := run("_resolve", "add", "library", "notes-old", filepath.Join(root, "b", "skills", "notes")); err != nil {
+		t.Fatalf("rename Library skill failed: %v\n%s", err, out)
+	}
+	old := readFile(t, filepath.Join(lib, "notes-old", "SKILL.md"))
+	if !strings.Contains(old, "name: notes-old\n") || !strings.Contains(old, "First.") {
+		t.Fatalf("Library skill not renamed:\n%s", old)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(lib, "notes", "SKILL.md")), "Second.") {
+		t.Fatal("incoming skill should take the original name")
+	}
+	stars := readFile(t, filepath.Join(config, "swoop", "stars"))
+	if !strings.Contains(stars, "\tnotes-old\t") || strings.Contains(stars, "\tnotes\t") {
+		t.Fatalf("star should follow the renamed skill:\n%s", stars)
+	}
+}
+
+func TestEngineStashNameClashLeftInPlace(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "Library copy.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	home := filepath.Join(root, "home")
+	writeSkill(t, filepath.Join(home, ".claude"), "notes", "Global copy.")
+	writeSkill(t, filepath.Join(home, ".claude"), "fresh", "No clash.")
+
+	dry, err := run("stash", "--dry-run")
+	if err != nil || !strings.Contains(dry, "clash") {
+		t.Fatalf("dry run should list the clash: %v\n%s", err, dry)
+	}
+	if _, err := os.Stat(filepath.Join(lib, "fresh")); err == nil {
+		t.Fatal("dry run moved a skill")
+	}
+
+	// no SWOOP_ASSUME_YES, stdin at EOF, and no controlling terminal (new session)
+	cmd := exec.Command("bash", "engine/swoop-core", "stash")
+	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(root, "config"),
+		"XDG_DATA_HOME="+filepath.Join(root, "data"), "NO_COLOR=1")
+	cmd.Env = withoutEnv(cmd.Env, "SWOOP_ASSUME_YES")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	b, err := cmd.CombinedOutput()
+	out := string(b)
+	if err != nil {
+		t.Fatalf("stash failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(lib, "fresh", "SKILL.md")); err != nil {
+		t.Fatalf("non-clashing skill should move:\n%s", out)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(home, ".claude", "skills", "notes", "SKILL.md")), "Global copy.") {
+		t.Fatal("clashing skill should stay in the global folder")
+	}
+	if !strings.Contains(readFile(t, filepath.Join(lib, "notes", "SKILL.md")), "Library copy.") {
+		t.Fatal("Library skill changed")
+	}
+	if !strings.Contains(out, "Name clash: notes") || !strings.Contains(out, "not moved 1") {
+		t.Fatalf("summary should name the clash and count it as not moved:\n%s", out)
+	}
+	clashes, err := run("_clashes", "stash")
+	if err != nil || clashes != filepath.Join(home, ".claude", "skills", "notes")+"\tnotes\n" {
+		t.Fatalf("_clashes stash = %q, %v", clashes, err)
+	}
+}
+
+func withoutEnv(env []string, key string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, key+"=") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+func writeManifest(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEngineRenameLibraryStarUsesManifestName(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required by the engine skill walker (star)")
+	}
+	run, root, lib, config := clashEnv(t)
+	writeManifest(t, filepath.Join(root, "a", "notes"), "---\nname: meeting-notes  \ndescription: First.\n---\n") // trailing spaces, unquoted
+	writeManifest(t, filepath.Join(root, "b", "notes"), "---\nname: notes\ndescription: Second.\n---\n")
+	run("add", filepath.Join(root, "a", "notes"))
+	if out, err := run("star", lib, "meeting-notes"); err != nil {
+		t.Fatalf("star failed: %v\n%s", err, out)
+	}
+	if out, err := run("_resolve", "add", "library", "notes-old", filepath.Join(root, "b", "notes")); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	stars := readFile(t, filepath.Join(config, "swoop", "stars"))
+	if !strings.Contains(stars, "\tnotes-old\t") || strings.Contains(stars, "meeting-notes") {
+		t.Fatalf("star should follow the renamed skill:\n%s", stars)
+	}
+}
+
+func TestEngineRenameIncomingSymlinkedManifestKeepsOriginal(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	real := filepath.Join(root, "real-SKILL.md")
+	original := "---\nname: notes\ndescription: Linked.\n---\n"
+	if err := os.WriteFile(real, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	incoming := filepath.Join(root, "b", "notes")
+	os.MkdirAll(incoming, 0o755)
+	if err := os.Symlink(real, filepath.Join(incoming, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("_resolve", "add", "incoming", "notes-b", incoming); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	if got := readFile(t, real); got != original {
+		t.Fatalf("original manifest changed:\n%s", got)
+	}
+	copyPath := filepath.Join(lib, "notes-b", "SKILL.md")
+	if fi, err := os.Lstat(copyPath); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("Library manifest should be a regular file: %v", err)
+	}
+	if got := readFile(t, copyPath); !strings.Contains(got, "name: notes-b\n") || !strings.Contains(got, "Linked.") {
+		t.Fatalf("Library copy not renamed:\n%s", got)
+	}
+}
+
+func TestEngineRenameKeepsCRLFFrontmatter(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	incoming := filepath.Join(root, "b", "notes")
+	writeManifest(t, incoming, "---\r\nname: notes\r\ndescription: Keep me.\r\nauthor: someone\r\n---\r\nbody\r\n")
+	if out, err := run("_resolve", "add", "incoming", "notes-crlf", incoming); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	want := "---\r\nname: notes-crlf\r\ndescription: Keep me.\r\nauthor: someone\r\n---\r\nbody\r\n"
+	if got := readFile(t, filepath.Join(lib, "notes-crlf", "SKILL.md")); got != want {
+		t.Fatalf("CRLF manifest = %q, want %q", got, want)
+	}
+}
+
+func TestEngineResolveTakesNameLiterally(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	writeSkill(t, filepath.Join(root, "b"), "notes", "Second.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	if out, err := run("_resolve", "add", "incoming", "--help", filepath.Join(root, "b", "skills", "notes")); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	if got := readFile(t, filepath.Join(lib, "--help", "SKILL.md")); !strings.Contains(got, "name: --help\n") || !strings.Contains(got, "Second.") {
+		t.Fatalf("--help rename not on disk:\n%s", got)
+	}
+}
+
+func TestEngineRenameIncomingRelativeManifestLink(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	original := "---\nname: notes\ndescription: Relative.\n---\n"
+	if err := os.WriteFile(filepath.Join(root, "manifest.md"), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	incoming := filepath.Join(root, "notes")
+	os.MkdirAll(incoming, 0o755)
+	if err := os.Symlink("../manifest.md", filepath.Join(incoming, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("_resolve", "add", "incoming", "notes-rel", incoming); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	if got := readFile(t, filepath.Join(root, "manifest.md")); got != original {
+		t.Fatalf("original manifest changed:\n%s", got)
+	}
+	got := readFile(t, filepath.Join(lib, "notes-rel", "SKILL.md"))
+	if !strings.Contains(got, "name: notes-rel\n") || !strings.Contains(got, "Relative.") {
+		t.Fatalf("Library copy not renamed:\n%s", got)
+	}
+}
+
+func TestEngineRenameIncomingFailureLeavesNoFolder(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	writeSkill(t, filepath.Join(root, "b"), "notes", "Second.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	incoming := filepath.Join(root, "b", "skills", "notes")
+	manifest := filepath.Join(incoming, "SKILL.md")
+	if err := os.Chmod(manifest, 0o000); err != nil { // the rewrite cannot read it
+		t.Fatal(err)
+	}
+	defer os.Chmod(manifest, 0o644)
+	if os.Getuid() == 0 {
+		t.Skip("root can read a 0000 file")
+	}
+	if out, err := run("_resolve", "add", "incoming", "notes-b", incoming); err == nil {
+		t.Fatalf("unreadable manifest should fail:\n%s", out)
+	}
+	if _, err := os.Lstat(filepath.Join(lib, "notes-b")); !os.IsNotExist(err) {
+		t.Fatalf("a failed rename must not leave the Library folder: %v", err)
+	}
+}
+
+func TestEngineRenameIncomingSymlinkedFolderKeepsOriginal(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	writeSkill(t, filepath.Join(root, "real"), "notes", "Linked folder.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	realManifest := filepath.Join(root, "real", "skills", "notes", "SKILL.md")
+	original := readFile(t, realManifest)
+	incoming := filepath.Join(root, "link", "notes")
+	os.MkdirAll(filepath.Dir(incoming), 0o755)
+	if err := os.Symlink(filepath.Join(root, "real", "skills", "notes"), incoming); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("_resolve", "add", "incoming", "archived", incoming); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	if got := readFile(t, realManifest); got != original {
+		t.Fatalf("original manifest changed:\n%s", got)
+	}
+	fi, err := os.Lstat(filepath.Join(lib, "archived"))
+	if err != nil || !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("Library entry should be a real directory: %v %v", fi, err)
+	}
+	if got := readFile(t, filepath.Join(lib, "archived", "SKILL.md")); !strings.Contains(got, "name: archived\n") {
+		t.Fatalf("Library copy not renamed:\n%s", got)
+	}
+}
+
+func TestEngineAddSymlinkedFolderCopiesRealDirectory(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "real"), "notes", "Linked folder.")
+	incoming := filepath.Join(root, "link", "notes")
+	os.MkdirAll(filepath.Dir(incoming), 0o755)
+	if err := os.Symlink(filepath.Join(root, "real", "skills", "notes"), incoming); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("add", incoming); err != nil {
+		t.Fatalf("add failed: %v\n%s", err, out)
+	}
+	if fi, err := os.Lstat(filepath.Join(lib, "notes")); err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		t.Fatalf("Library entry should be a real directory: %v %v", fi, err)
+	}
+}
+
 // VRTS-7: removing a Source with Stars warns, lists them, and asks first.
 // Each case runs with a known prompt backend: "plain" hides gum and fzf so
 // the [y/N] fallback reads stdin; "gum" puts a stub gum first on PATH.
