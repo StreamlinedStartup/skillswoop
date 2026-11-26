@@ -1071,3 +1071,46 @@ func TestEngineRenameIncomingFailureLeavesNoFolder(t *testing.T) {
 		t.Fatalf("a failed rename must not leave the Library folder: %v", err)
 	}
 }
+
+func TestEngineRenameIncomingSymlinkedFolderKeepsOriginal(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	writeSkill(t, filepath.Join(root, "real"), "notes", "Linked folder.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	realManifest := filepath.Join(root, "real", "skills", "notes", "SKILL.md")
+	original := readFile(t, realManifest)
+	incoming := filepath.Join(root, "link", "notes")
+	os.MkdirAll(filepath.Dir(incoming), 0o755)
+	if err := os.Symlink(filepath.Join(root, "real", "skills", "notes"), incoming); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("_resolve", "add", "incoming", "archived", incoming); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	if got := readFile(t, realManifest); got != original {
+		t.Fatalf("original manifest changed:\n%s", got)
+	}
+	fi, err := os.Lstat(filepath.Join(lib, "archived"))
+	if err != nil || !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("Library entry should be a real directory: %v %v", fi, err)
+	}
+	if got := readFile(t, filepath.Join(lib, "archived", "SKILL.md")); !strings.Contains(got, "name: archived\n") {
+		t.Fatalf("Library copy not renamed:\n%s", got)
+	}
+}
+
+func TestEngineAddSymlinkedFolderCopiesRealDirectory(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "real"), "notes", "Linked folder.")
+	incoming := filepath.Join(root, "link", "notes")
+	os.MkdirAll(filepath.Dir(incoming), 0o755)
+	if err := os.Symlink(filepath.Join(root, "real", "skills", "notes"), incoming); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("add", incoming); err != nil {
+		t.Fatalf("add failed: %v\n%s", err, out)
+	}
+	if fi, err := os.Lstat(filepath.Join(lib, "notes")); err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		t.Fatalf("Library entry should be a real directory: %v %v", fi, err)
+	}
+}

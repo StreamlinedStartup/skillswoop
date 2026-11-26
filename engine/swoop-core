@@ -701,7 +701,7 @@ cmd_add() {
       if [ -f "$dir/SKILL.md" ] && [ "$COPY_LOCAL" = 1 ]; then
         local name; name="$(basename "$dir")"
         case "$(clash_state "$dir")" in
-          none)  cp -R "$dir" "$LIBRARY/$name"; printf '  %scopied%s %s -> Library\n' "$GRN" "$RST" "$name" ;;
+          none)  copy_skill "$dir" "$LIBRARY/$name"; printf '  %scopied%s %s -> Library\n' "$GRN" "$RST" "$name" ;;
           same)  printf '  %s is already in the Library (identical) - nothing changed\n' "$name" ;;
           clash) if can_ask; then ask_clash add "$dir" || [ "$?" = 2 ] || rc=1
                  else
@@ -957,6 +957,12 @@ tidy_entries() {
 }
 
 # ---- Library Name clash ---------------------------------------------------
+# copy a skill folder's contents into a new real directory. `cp -R dir` copies a
+# symlinked folder as the link itself, so the Library entry (and any rewrite
+# through it) would point back at the person's original.
+copy_skill() {  # $1 skill dir  $2 new dir (must not exist)
+  mkdir "$2" && cp -R "$1/." "$2/"
+}
 # A skill entering the Library clashes when the Library already holds a folder
 # with the same name and different contents. Identical folders are not a clash.
 clash_state() {  # $1 incoming skill dir; prints none | same | clash
@@ -1021,7 +1027,7 @@ resolve_clash() {  # $1 add|stash  $2 incoming|library  $3 new name  $4 incoming
               # Read the manifest through the original folder, where a relative
               # SKILL.md link still resolves.
               local stage; stage="$(mktmpd)/$new"
-              cp -R "$src" "$stage" || return 1
+              copy_skill "$src" "$stage" || return 1
               set_skill_name "$stage" "$new" "$src/SKILL.md" || return 1
               mv "$stage" "$LIBRARY/$new" || return 1
               if [ "$mode" = stash ]; then rm -rf "$src" || return 1; fi
@@ -1034,7 +1040,7 @@ resolve_clash() {  # $1 add|stash  $2 incoming|library  $3 new name  $4 incoming
     *) die "unknown clash choice: $how" ;;
   esac
   case "$mode" in
-    add)   cp -R "$src" "$dst" || return 1 ;;
+    add)   copy_skill "$src" "$dst" || return 1 ;;
     stash) mv "$src" "$dst" || return 1 ;;
     *) die "unknown clash mode: $mode" ;;
   esac
