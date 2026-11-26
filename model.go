@@ -96,13 +96,15 @@ type model struct {
 	denyCmd        func(m *model) tea.Cmd // optional "no" action in scConfirm (nil = just go back)
 	flash          string                 // transient status note
 
-	clashes     []clash // Name clashes still to resolve (scClash); [0] is on screen
-	clashChoice int     // index into clashChoices
-	clashNaming bool    // asking for the new name
-	clashErr    string  // why the typed name was rejected
-	clashTitle  string  // result title once every clash is handled
-	clashLog    string  // engine output collected along the way
-	clashFailed bool    // a _resolve run failed
+	clashes      []clash     // Name clashes still to resolve (scClash); [0] is on screen
+	clashChoice  int         // index into clashChoices
+	clashNaming  bool        // asking for the new name
+	clashErr     string      // why the typed name was rejected
+	clashTitle   string      // result title once every clash is handled
+	clashLog     string      // engine output collected along the way
+	clashFailed  bool        // a _resolve run failed
+	clashTidy    *tidyCounts // Tidy counts, updated as clashes are resolved (nil for add)
+	clashSkipped []string    // Tidy clashes the person skipped
 
 	agents string
 }

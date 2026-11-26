@@ -738,3 +738,49 @@ func TestTidyClashScreenRenameLibrarySkill(t *testing.T) {
 		t.Fatal("non-clashing skill should be moved")
 	}
 }
+
+func TestClashNameWithSpacesIsRejected(t *testing.T) {
+	m, root, lib := clashModel(t)
+	writeSkill(t, filepath.Join(root, "other"), "notes", "Incoming copy.")
+	m = step(t, m, addSourceCmd(filepath.Join(root, "other", "skills", "notes"))())
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.input.SetValue(" notes-two ")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.screen != scClash || !m.clashNaming || m.clashErr == "" {
+		t.Fatalf("spaced name should keep the prompt open: screen=%d naming=%v err=%q", m.screen, m.clashNaming, m.clashErr)
+	}
+	if _, err := os.Stat(filepath.Join(lib, "notes-two")); err == nil {
+		t.Fatal("nothing should be renamed")
+	}
+}
+
+func TestTidyClashSummaryCountsChoices(t *testing.T) {
+	m, root, _ := clashModel(t)
+	writeSkill(t, filepath.Join(root, "lib2"), "memo", "Library memo.")
+	if out, err := core("add", filepath.Join(root, "lib2", "skills", "memo")); err != nil {
+		t.Fatalf("seed add failed: %v\n%s", err, out)
+	}
+	global := filepath.Join(root, "home", ".claude")
+	writeSkill(t, global, "memo", "Global memo.")
+	writeSkill(t, global, "notes", "Global notes.")
+	writeSkill(t, global, "fresh", "No clash.")
+
+	m = step(t, m, tidyCmd()())
+	if len(m.clashes) != 2 {
+		t.Fatalf("want 2 clashes, got %d", len(m.clashes))
+	}
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // memo: rename incoming
+	m = typeText(t, m, "memo-global")
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = step(t, m, tea.KeyMsg{Type: tea.KeyEsc}) // notes: skip
+	if m.screen != scResult {
+		t.Fatalf("screen = %d, want scResult", m.screen)
+	}
+	body := m.vp.View()
+	if !strings.Contains(body, "Done. moved 2 · unlinked 0 · not moved 1 · failed 0") {
+		t.Fatalf("final summary should count the rename and the skip:\n%s", body)
+	}
+	if strings.Count(body, "Done.") != 1 || strings.Contains(body, "Run `swoop stash`") || !strings.Contains(body, "skipped: notes") {
+		t.Fatalf("stale first-pass summary in result:\n%s", body)
+	}
+}

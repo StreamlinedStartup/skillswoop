@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -898,9 +899,12 @@ func TestEngineStashNameClashLeftInPlace(t *testing.T) {
 		t.Fatal("dry run moved a skill")
 	}
 
+	// no SWOOP_ASSUME_YES, stdin at EOF, and no controlling terminal (new session)
 	cmd := exec.Command("bash", "engine/swoop-core", "stash")
 	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(root, "config"),
-		"XDG_DATA_HOME="+filepath.Join(root, "data"), "NO_COLOR=1", "SWOOP_ASSUME_YES=1")
+		"XDG_DATA_HOME="+filepath.Join(root, "data"), "NO_COLOR=1")
+	cmd.Env = withoutEnv(cmd.Env, "SWOOP_ASSUME_YES")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	b, err := cmd.CombinedOutput()
 	out := string(b)
 	if err != nil {
@@ -921,5 +925,102 @@ func TestEngineStashNameClashLeftInPlace(t *testing.T) {
 	clashes, err := run("_clashes", "stash")
 	if err != nil || clashes != filepath.Join(home, ".claude", "skills", "notes")+"\tnotes\n" {
 		t.Fatalf("_clashes stash = %q, %v", clashes, err)
+	}
+}
+
+func withoutEnv(env []string, key string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, key+"=") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+func writeManifest(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEngineRenameLibraryStarUsesManifestName(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required by the engine skill walker (star)")
+	}
+	run, root, lib, config := clashEnv(t)
+	writeManifest(t, filepath.Join(root, "a", "notes"), "---\nname: meeting-notes\ndescription: First.\n---\n")
+	writeManifest(t, filepath.Join(root, "b", "notes"), "---\nname: notes\ndescription: Second.\n---\n")
+	run("add", filepath.Join(root, "a", "notes"))
+	if out, err := run("star", lib, "meeting-notes"); err != nil {
+		t.Fatalf("star failed: %v\n%s", err, out)
+	}
+	if out, err := run("_resolve", "add", "library", "notes-old", filepath.Join(root, "b", "notes")); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	stars := readFile(t, filepath.Join(config, "swoop", "stars"))
+	if !strings.Contains(stars, "\tnotes-old\t") || strings.Contains(stars, "meeting-notes") {
+		t.Fatalf("star should follow the renamed skill:\n%s", stars)
+	}
+}
+
+func TestEngineRenameIncomingSymlinkedManifestKeepsOriginal(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	real := filepath.Join(root, "real-SKILL.md")
+	original := "---\nname: notes\ndescription: Linked.\n---\n"
+	if err := os.WriteFile(real, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	incoming := filepath.Join(root, "b", "notes")
+	os.MkdirAll(incoming, 0o755)
+	if err := os.Symlink(real, filepath.Join(incoming, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("_resolve", "add", "incoming", "notes-b", incoming); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	if got := readFile(t, real); got != original {
+		t.Fatalf("original manifest changed:\n%s", got)
+	}
+	copyPath := filepath.Join(lib, "notes-b", "SKILL.md")
+	if fi, err := os.Lstat(copyPath); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("Library manifest should be a regular file: %v", err)
+	}
+	if got := readFile(t, copyPath); !strings.Contains(got, "name: notes-b\n") || !strings.Contains(got, "Linked.") {
+		t.Fatalf("Library copy not renamed:\n%s", got)
+	}
+}
+
+func TestEngineRenameKeepsCRLFFrontmatter(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	incoming := filepath.Join(root, "b", "notes")
+	writeManifest(t, incoming, "---\r\nname: notes\r\ndescription: Keep me.\r\nauthor: someone\r\n---\r\nbody\r\n")
+	if out, err := run("_resolve", "add", "incoming", "notes-crlf", incoming); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	want := "---\r\nname: notes-crlf\r\ndescription: Keep me.\r\nauthor: someone\r\n---\r\nbody\r\n"
+	if got := readFile(t, filepath.Join(lib, "notes-crlf", "SKILL.md")); got != want {
+		t.Fatalf("CRLF manifest = %q, want %q", got, want)
+	}
+}
+
+func TestEngineResolveTakesNameLiterally(t *testing.T) {
+	run, root, lib, _ := clashEnv(t)
+	writeSkill(t, filepath.Join(root, "a"), "notes", "First.")
+	writeSkill(t, filepath.Join(root, "b"), "notes", "Second.")
+	run("add", filepath.Join(root, "a", "skills", "notes"))
+	if out, err := run("_resolve", "add", "incoming", "--help", filepath.Join(root, "b", "skills", "notes")); err != nil {
+		t.Fatalf("rename failed: %v\n%s", err, out)
+	}
+	if got := readFile(t, filepath.Join(lib, "--help", "SKILL.md")); !strings.Contains(got, "name: --help\n") || !strings.Contains(got, "Second.") {
+		t.Fatalf("--help rename not on disk:\n%s", got)
 	}
 }

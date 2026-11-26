@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,11 +23,46 @@ type clash struct {
 var clashChoices = []string{"Rename the incoming skill", "Rename the Library skill", "Skip"}
 
 // clashMsg hands the TUI the clashes left after an add or Tidy run, plus the
-// engine output so far.
+// engine output so far. tidy holds Tidy's counts with its summary lines taken
+// out of log, so the final summary can include the person's choices.
 type clashMsg struct {
 	title   string
 	log     string
 	clashes []clash
+	tidy    *tidyCounts
+}
+
+type tidyCounts struct{ moved, unlinked, notMoved, failed int }
+
+// tidySummaryRE matches the engine's stash summary line.
+var tidySummaryRE = regexp.MustCompile(`^Done\. moved (\d+) · unlinked (\d+) · not moved (\d+) · failed (\d+)$`)
+
+// splitTidySummary takes the summary and Name clash lines out of Tidy's output
+// and returns the counts; ok is false when the summary line is missing.
+func splitTidySummary(out string) (string, tidyCounts, bool) {
+	var keep []string
+	var c tidyCounts
+	ok := false
+	for _, ln := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if mm := tidySummaryRE.FindStringSubmatch(ln); mm != nil {
+			c.moved, _ = strconv.Atoi(mm[1])
+			c.unlinked, _ = strconv.Atoi(mm[2])
+			c.notMoved, _ = strconv.Atoi(mm[3])
+			c.failed, _ = strconv.Atoi(mm[4])
+			ok = true
+			continue
+		}
+		if strings.HasPrefix(ln, "Name clash: ") || strings.HasPrefix(ln, "Run `swoop stash` in a terminal") {
+			continue
+		}
+		keep = append(keep, ln)
+	}
+	return strings.Join(keep, "\n"), c, ok
+}
+
+func (c tidyCounts) String() string {
+	return "Done. moved " + itoa(c.moved) + " · unlinked " + itoa(c.unlinked) +
+		" · not moved " + itoa(c.notMoved) + " · failed " + itoa(c.failed)
 }
 
 // clashStepMsg reports one _resolve run.
@@ -73,7 +110,11 @@ func tidyCmd() tea.Cmd {
 			return opDoneMsg{title: "tidy global skills", output: stripANSI(out + cl), err: cerr}
 		}
 		if cs := parseClashes("stash", cl); len(cs) > 0 {
-			return clashMsg{title: "tidy global skills", log: stripANSI(out), clashes: cs}
+			log, counts, ok := splitTidySummary(stripANSI(out))
+			if !ok {
+				return opDoneMsg{title: "tidy global skills", output: stripANSI(out), err: errors.New("tidy summary line missing from engine output")}
+			}
+			return clashMsg{title: "tidy global skills", log: log, clashes: cs, tidy: &counts}
 		}
 		return opDoneMsg{title: "tidy global skills", output: stripANSI(out)}
 	}
@@ -108,6 +149,8 @@ func (m *model) startClashes(msg clashMsg) {
 	m.clashTitle = msg.title
 	m.clashLog = strings.TrimRight(msg.log, "\n")
 	m.clashFailed = false
+	m.clashTidy = msg.tidy
+	m.clashSkipped = nil
 	m.beginClash()
 }
 
@@ -137,6 +180,13 @@ func (m *model) nextClash() {
 		m.beginClash()
 		return
 	}
+	if t := m.clashTidy; t != nil {
+		m.logClash(t.String())
+		if len(m.clashSkipped) > 0 {
+			m.logClash("Name clash, skipped: " + strings.Join(m.clashSkipped, " "))
+		}
+		m.clashTidy = nil
+	}
 	m.screen = scResult
 	m.resultTitle = m.clashTitle
 	m.resultErr = m.clashFailed
@@ -162,7 +212,7 @@ func (m *model) onClashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Blur()
 			return m, nil
 		case "enter":
-			name := strings.TrimSpace(m.input.Value())
+			name := m.input.Value() // validated as typed: spaces are not trimmed away
 			if e := newNameError(name); e != "" {
 				m.clashErr = e
 				return m, nil
@@ -194,6 +244,7 @@ func (m *model) onClashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter", " ":
 		if m.clashChoice == 2 {
 			m.logClash("  skipped " + c.name + " (Name clash - nothing changed)")
+			m.clashSkipped = append(m.clashSkipped, c.name)
 			m.nextClash()
 			return m, nil
 		}
@@ -207,6 +258,14 @@ func (m *model) onClashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) onClashStep(msg clashStepMsg) {
+	if t := m.clashTidy; t != nil {
+		t.notMoved--
+		if msg.err != nil {
+			t.failed++
+		} else {
+			t.moved++
+		}
+	}
 	if msg.err != nil {
 		m.clashFailed = true
 		if strings.TrimSpace(msg.output) == "" {
