@@ -780,14 +780,34 @@ func TestEngineRemoveWarnsAboutStars(t *testing.T) {
 	sourcesFile := filepath.Join(config, "swoop", "sources")
 	starsFile := filepath.Join(config, "swoop", "stars")
 
-	// PATH without any gum or fzf from the host
+	// PATH without any gum or fzf from the host: a directory holding either
+	// is replaced by a mirror of its other entries, so tools that share it
+	// (node, say) stay on PATH
 	var keep []string
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+	for i, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		_, gumErr := os.Stat(filepath.Join(dir, "gum"))
 		_, fzfErr := os.Stat(filepath.Join(dir, "fzf"))
 		if gumErr != nil && fzfErr != nil {
 			keep = append(keep, dir)
+			continue
 		}
+		mirror := filepath.Join(root, "pathmirror", strconv.Itoa(i))
+		if err := os.MkdirAll(mirror, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range ents {
+			if e.Name() == "gum" || e.Name() == "fzf" {
+				continue
+			}
+			if err := os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(mirror, e.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+		keep = append(keep, mirror)
 	}
 	plainPath := strings.Join(keep, string(os.PathListSeparator))
 	// stub gum: confirm answers from stdin and applies its default on empty
